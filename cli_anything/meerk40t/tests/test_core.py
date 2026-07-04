@@ -1,0 +1,275 @@
+"""Unit tests for cli-anything-meerk40t core modules.
+
+Each test uses the real Meerk40tBackend booted headlessly. No external test
+frameworks are required; only the standard library unittest is used.
+"""
+
+from __future__ import annotations
+
+import os
+import shutil
+import tempfile
+import unittest
+import xml.etree.ElementTree as ET
+
+from cli_anything.meerk40t.core import elements
+from cli_anything.meerk40t.core import export
+from cli_anything.meerk40t.core import operations
+from cli_anything.meerk40t.core import project
+from cli_anything.meerk40t.core import session
+from cli_anything.meerk40t.utils.meerk40t_backend import Meerk40tBackend
+
+
+class BackendTestCase(unittest.TestCase):
+    """Base class that creates and tears down a fresh backend per test."""
+
+    def setUp(self):
+        self.backend = Meerk40tBackend()
+        self.backend.start()
+        self.temp_dir = tempfile.mkdtemp(prefix="mk_test_")
+
+    def tearDown(self):
+        try:
+            self.backend.shutdown()
+        finally:
+            shutil.rmtree(self.temp_dir, ignore_errors=True)
+
+    def temp_path(self, filename):
+        return os.path.join(self.temp_dir, filename)
+
+
+class TestBackend(BackendTestCase):
+    def test_start_shutdown(self):
+        # setUp already started; backend should be usable.
+        self.assertIsNotNone(self.backend.kernel)
+        self.backend.shutdown()
+        self.assertIsNone(self.backend._kernel)
+
+    def test_run_captures_output(self):
+        out = self.backend.run("circle 1in 1in 1in")
+        self.assertIsInstance(out, list)
+        # Captured output includes at least the command echo.
+        self.assertGreater(len(out), 0)
+
+    def test_save_svg_creates_valid_svg(self):
+        path = self.temp_path("out.svg")
+        self.backend.run("circle 1in 1in 1in")
+        self.assertTrue(self.backend.save_svg(path))
+        self.assertTrue(os.path.exists(path))
+        self.assertGreater(os.path.getsize(path), 0)
+        root = ET.parse(path).getroot()
+        self.assertTrue(root.tag.endswith("svg"))
+
+    def test_load_file(self):
+        path = self.temp_path("roundtrip.svg")
+        self.backend.run("circle 1in 1in 1in")
+        self.assertTrue(self.backend.save_svg(path))
+        self.backend.run("elements clear all")
+
+        fresh = Meerk40tBackend()
+        fresh.start()
+        try:
+            self.assertTrue(fresh.load_file(path))
+            self.assertGreaterEqual(fresh.elem_count(), 1)
+        finally:
+            fresh.shutdown()
+
+    def test_elems_after_add(self):
+        before = self.backend.elem_count()
+        self.backend.run("circle 1in 1in 1in")
+        after = self.backend.elem_count()
+        self.assertGreater(after, before)
+
+    def test_ops_exist(self):
+        self.backend.run("circle 1in 1in 1in")
+        self.backend.run("element* classify")
+        ops = self.backend.ops()
+        self.assertIsInstance(ops, list)
+        self.assertGreater(len(ops), 0)
+
+    def test_help_text(self):
+        text = self.backend.help_text("circle")
+        self.assertIsInstance(text, str)
+        self.assertGreater(len(text), 0)
+        self.assertIn("circle", text.lower())
+
+
+class TestProject(BackendTestCase):
+    def test_create_project(self):
+        result = project.create_project(self.backend, name="TestProject")
+        self.assertIsInstance(result, dict)
+        self.assertEqual(result["name"], "TestProject")
+        self.assertIn("elements", result)
+        self.assertIn("operations", result)
+
+    def test_open_nonexistent_creates_empty(self):
+        path = self.temp_path("does_not_exist.svg")
+        result = project.open_project(self.backend, path)
+        self.assertEqual(result["path"], path)
+        self.assertEqual(result["elements"], 0)
+
+    def test_save_project(self):
+        self.backend.run("circle 1in 1in 1in")
+        path = self.temp_path("project.svg")
+        result = project.save_project(self.backend, path)
+        self.assertEqual(result["path"], path)
+        self.assertGreater(result["size_bytes"], 0)
+        self.assertTrue(os.path.exists(path))
+
+    def test_project_info(self):
+        self.backend.run("circle 1in 1in 1in")
+        info = project.project_info(self.backend)
+        self.assertIn("elements", info)
+        self.assertIn("operations", info)
+        self.assertIn("device", info)
+        self.assertEqual(info["elements"], self.backend.elem_count())
+
+
+class TestElements(BackendTestCase):
+    def test_add_circle(self):
+        result = elements.add_circle(self.backend, "1in", "1in", "1in")
+        self.assertTrue(result["added"])
+        self.assertEqual(result["type"], "circle")
+        self.assertGreater(result["total_elements"], 0)
+
+    def test_add_rect_with_stroke_fill(self):
+        elements.add_rect(
+            self.backend, "1in", "1in", "2in", "2in", stroke="#ff0000", fill="#0000ff"
+        )
+        rect = None
+        for node in self.backend.elems():
+            if "rect" in node.type:
+                rect = node
+                break
+        self.assertIsNotNone(rect)
+        self.assertEqual(str(rect.stroke), "#ff0000")
+        self.assertEqual(str(rect.fill), "#0000ff")
+
+    def test_add_ellipse(self):
+        result = elements.add_ellipse(self.backend, "1in", "1in", "0.5in", "0.25in")
+        self.assertTrue(result["added"])
+        self.assertEqual(result["type"], "ellipse")
+
+    def test_add_line(self):
+        result = elements.add_line(
+            self.backend, "0in", "0in", "1in", "1in", stroke="#000000"
+        )
+        self.assertTrue(result["added"])
+        self.assertEqual(result["type"], "line")
+
+    def test_add_text(self):
+        result = elements.add_text(self.backend, "1in", "1in", "Hello Laser")
+        self.assertTrue(result["added"])
+        self.assertEqual(result["type"], "text")
+
+    def test_list_elements(self):
+        elements.add_circle(self.backend, "1in", "1in", "1in")
+        listed = elements.list_elements(self.backend)
+        self.assertIsInstance(listed, list)
+        self.assertEqual(len(listed), self.backend.elem_count())
+        if listed:
+            self.assertIn("type", listed[0])
+            self.assertIn("stroke", listed[0])
+            self.assertIn("fill", listed[0])
+
+    def test_delete_element(self):
+        elements.add_circle(self.backend, "1in", "1in", "1in")
+        before = self.backend.elem_count()
+        result = elements.delete_element(self.backend, 0)
+        self.assertTrue(result["deleted"])
+        self.assertLess(self.backend.elem_count(), before)
+
+    def test_clear_elements(self):
+        elements.add_circle(self.backend, "1in", "1in", "1in")
+        elements.add_rect(self.backend, "0in", "0in", "1in", "1in")
+        result = elements.clear_elements(self.backend)
+        self.assertTrue(result["cleared"])
+        self.assertEqual(result["total_elements"], 0)
+        self.assertEqual(self.backend.elem_count(), 0)
+
+
+class TestOperations(BackendTestCase):
+    def test_list_operations(self):
+        ops = operations.list_operations(self.backend)
+        self.assertIsInstance(ops, list)
+
+    def test_add_operation(self):
+        before = self.backend.op_count()
+        result = operations.add_operation(self.backend, "cut")
+        self.assertTrue(result["added"])
+        self.assertEqual(result["type"], "cut")
+        self.assertGreater(self.backend.op_count(), before)
+
+    def test_classify(self):
+        elements.add_circle(self.backend, "1in", "1in", "1in")
+        result = operations.classify_elements(self.backend)
+        self.assertTrue(result["classified"])
+        self.assertGreater(self.backend.op_count(), 0)
+
+
+class TestSession(unittest.TestCase):
+    def setUp(self):
+        self.temp_dir = tempfile.mkdtemp(prefix="mk_session_")
+        self.session_path = os.path.join(self.temp_dir, "session.json")
+
+    def tearDown(self):
+        shutil.rmtree(self.temp_dir, ignore_errors=True)
+
+    def test_session_save_load(self):
+        sess = session.Session(self.session_path)
+        sess.name = "LaserJob"
+        sess.record_command("circle 1in 1in 1in")
+        sess.record_command("rect 0in 0in 1in 1in")
+        sess.save()
+        self.assertTrue(os.path.exists(self.session_path))
+
+        loaded = session.Session(self.session_path)
+        self.assertEqual(loaded.name, "LaserJob")
+        self.assertEqual(len(loaded.history), 2)
+        self.assertEqual(loaded.history[0]["cmd"], "circle 1in 1in 1in")
+
+    def test_undo_redo(self):
+        sess = session.Session(self.session_path)
+        sess.record_command("circle 1in 1in 1in")
+        sess.record_command("rect 0in 0in 1in 1in")
+        self.assertEqual(len(sess.undo_stack), 2)
+
+        undone = sess.undo()
+        self.assertEqual(undone, "rect 0in 0in 1in 1in")
+        self.assertEqual(len(sess.undo_stack), 1)
+        self.assertEqual(len(sess.redo_stack), 1)
+
+        redone = sess.redo()
+        self.assertEqual(redone, "rect 0in 0in 1in 1in")
+        self.assertEqual(len(sess.undo_stack), 2)
+        self.assertEqual(len(sess.redo_stack), 0)
+
+
+class TestExport(BackendTestCase):
+    def test_export_svg(self):
+        elements.add_circle(self.backend, "1in", "1in", "1in")
+        path = self.temp_path("export.svg")
+        result = export.export_svg(self.backend, path)
+        self.assertEqual(result["format"], "svg")
+        self.assertGreater(result["size_bytes"], 0)
+        self.assertTrue(os.path.exists(path))
+        root = ET.parse(path).getroot()
+        self.assertTrue(root.tag.endswith("svg"))
+
+    def test_export_svgz(self):
+        elements.add_circle(self.backend, "1in", "1in", "1in")
+        path = self.temp_path("export.svgz")
+        result = export.export_svgz(self.backend, path)
+        self.assertEqual(result["format"], "svg")
+        self.assertGreater(result["size_bytes"], 0)
+        self.assertTrue(os.path.exists(path))
+
+    def test_export_png_raises_without_renderer(self):
+        elements.add_circle(self.backend, "1in", "1in", "1in")
+        with self.assertRaises(RuntimeError) as ctx:
+            export.export_png(self.backend, self.temp_path("export.png"))
+        self.assertIn("render-op/make_raster", str(ctx.exception))
+
+
+if __name__ == "__main__":
+    unittest.main()
