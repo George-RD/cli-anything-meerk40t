@@ -46,3 +46,23 @@ def set_operation(backend, index, key, value):
             except Exception:
                 pass
     return {"set": True, "index": index, "key": key, "value": value}
+
+
+def delete_operation(backend, index):
+    ops = backend.ops()
+    if 0 <= index < len(ops):
+        node = ops[index]
+        try:
+            node.remove_node()
+            return {"deleted": True, "index": index, "total_ops": backend.op_count()}
+        except Exception:
+            pass
+    return {"deleted": False, "index": index, "total_ops": backend.op_count()}
+
+
+def clear_operations(backend):
+    try:
+        backend.elements.op_branch.remove_all_children()
+    except Exception:
+        pass
+    return {"cleared": True, "total_ops": backend.op_count()}

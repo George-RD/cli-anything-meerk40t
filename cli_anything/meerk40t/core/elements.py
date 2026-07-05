@@ -191,3 +191,194 @@ def frame(backend):
     backend.run("frame")
     after = backend.elem_count()
     return {"framed": after > before, "total_elements": after}
+
+
+def translate_element(backend, index, tx, ty, absolute=False):
+    elems = backend.elems()
+    if not (0 <= index < len(elems)):
+        return {"translated": False, "error": f"Index {index} out of range", "index": index}
+    
+    node = elems[index]
+    before_x = node.matrix.value_trans_x()
+    before_y = node.matrix.value_trans_y()
+    
+    backend.run(f"element{index} select")
+    cmd = "translate"
+    if absolute:
+        cmd += " -a"
+    cmd += f" {tx} {ty}"
+    backend.run(cmd)
+    
+    after_x = node.matrix.value_trans_x()
+    after_y = node.matrix.value_trans_y()
+    
+    changed = (after_x != before_x) or (after_y != before_y)
+    return {
+        "translated": changed or (tx == "0" and ty == "0"),
+        "index": index,
+        "before": {"x": before_x, "y": before_y},
+        "after": {"x": after_x, "y": after_y},
+        "absolute": absolute,
+    }
+
+
+def scale_element(backend, index, scale_x, scale_y=None, absolute=False, px=None, py=None):
+    elems = backend.elems()
+    if not (0 <= index < len(elems)):
+        return {"scaled": False, "error": f"Index {index} out of range", "index": index}
+        
+    node = elems[index]
+    before_sx = node.matrix.value_scale_x()
+    before_sy = node.matrix.value_scale_y()
+    
+    backend.run(f"element{index} select")
+    cmd = f"scale {scale_x}"
+    if scale_y is not None:
+        cmd += f" {scale_y}"
+    if absolute:
+        cmd += " -a"
+    if px is not None:
+        cmd += f" -x {px}"
+    if py is not None:
+        cmd += f" -y {py}"
+    backend.run(cmd)
+    
+    after_sx = node.matrix.value_scale_x()
+    after_sy = node.matrix.value_scale_y()
+    
+    changed = (after_sx != before_sx) or (after_sy != before_sy)
+    return {
+        "scaled": changed or (scale_x == "1" and (scale_y is None or scale_y == "1")),
+        "index": index,
+        "before": {"scale_x": before_sx, "scale_y": before_sy},
+        "after": {"scale_x": after_sx, "scale_y": after_sy},
+        "absolute": absolute,
+    }
+
+
+def rotate_element(backend, index, angle, absolute=False, cx=None, cy=None):
+    elems = backend.elems()
+    if not (0 <= index < len(elems)):
+        return {"rotated": False, "error": f"Index {index} out of range", "index": index}
+        
+    node = elems[index]
+    before_rot = float(node.matrix.rotation)
+    
+    backend.run(f"element{index} select")
+    cmd = f"rotate {angle}"
+    if absolute:
+        cmd += " -a"
+    if cx is not None:
+        cmd += f" -x {cx}"
+    if cy is not None:
+        cmd += f" -y {cy}"
+    backend.run(cmd)
+    
+    after_rot = float(node.matrix.rotation)
+    
+    changed = (after_rot != before_rot)
+    return {
+        "rotated": changed or angle == "0deg",
+        "index": index,
+        "before_rotation": before_rot,
+        "after_rotation": after_rot,
+        "absolute": absolute,
+    }
+
+
+def align_elements(backend, mode, indexes=None):
+    all_nodes = list(backend.elems())
+    if indexes:
+        selected = [all_nodes[i] for i in indexes if 0 <= i < len(all_nodes)]
+    else:
+        selected = all_nodes
+        
+    if not selected:
+        return {"aligned": False, "error": "No elements selected", "mode": mode}
+        
+    backend.elements.set_emphasis(selected)
+    
+    before_bounds = []
+    for node in selected:
+        try:
+            before_bounds.append(tuple(node.bounds) if node.bounds else None)
+        except Exception:
+            before_bounds.append(None)
+            
+    backend.run(f"align {mode}")
+    
+    after_bounds = []
+    for node in selected:
+        try:
+            after_bounds.append(tuple(node.bounds) if node.bounds else None)
+        except Exception:
+            after_bounds.append(None)
+            
+    changed = any(b != a for b, a in zip(before_bounds, after_bounds) if b is not None and a is not None)
+    return {
+        "aligned": changed or len(selected) <= 1,
+        "mode": mode,
+        "num_elements": len(selected),
+    }
+
+
+def _group_count(backend):
+    return sum(1 for node in backend.elements.elems_nodes() if node.type == "group")
+
+
+def group_elements(backend, label=None, indexes=None):
+    all_nodes = list(backend.elems())
+    if indexes:
+        selected = [all_nodes[i] for i in indexes if 0 <= i < len(all_nodes)]
+    else:
+        selected = all_nodes
+        
+    if not selected:
+        return {"grouped": False, "error": "No elements selected", "label": label}
+        
+    backend.elements.set_emphasis(selected)
+    
+    before_count = _group_count(backend)
+    
+    cmd = "group"
+    if label:
+        cmd += f" {label}"
+    backend.run(cmd)
+    
+    after_count = _group_count(backend)
+    
+    return {
+        "grouped": after_count > before_count,
+        "label": label,
+        "num_elements": len(selected),
+        "before_groups": before_count,
+        "after_groups": after_count,
+    }
+
+
+def ungroup_elements(backend, index=None):
+    all_nodes = list(backend.elements.elems_nodes())
+    if index is not None:
+        if 0 <= index < len(all_nodes) and all_nodes[index].type in ("group", "file"):
+            groups_to_select = [all_nodes[index]]
+        else:
+            return {"ungrouped": False, "error": f"Node at index {index} is not a group or file"}
+    else:
+        groups_to_select = [node for node in all_nodes if node.type == "group"]
+        
+    if not groups_to_select:
+        return {"ungrouped": False, "error": "No groups found to ungroup"}
+        
+    backend.elements.set_emphasis(groups_to_select)
+    
+    before_count = _group_count(backend)
+    
+    backend.run("ungroup")
+    
+    after_count = _group_count(backend)
+    
+    return {
+        "ungrouped": after_count < before_count,
+        "before_groups": before_count,
+        "after_groups": after_count,
+    }

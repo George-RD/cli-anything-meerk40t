@@ -39,7 +39,7 @@ Create, open, save, inspect, and close SVG projects.
 
 ### `elements` — Shape and object manipulation
 
-Add geometric primitives and text, list, select, delete, or clear elements.
+Add geometric primitives and text, list, select, delete, clear, transform, align, and group/ungroup elements.
 
 - `elements circle CX CY R [--stroke COLOR] [--fill COLOR]` — Add a circle.
 - `elements rect X Y W H [--stroke COLOR] [--fill COLOR]` — Add a rectangle.
@@ -52,16 +52,24 @@ Add geometric primitives and text, list, select, delete, or clear elements.
 - `elements select INDEX` — Select an element by index.
 - `elements clear` — Remove all elements.
 - `elements frame` — Add a frame element around the project bounds.
+- `elements translate INDEX DX DY [--absolute]` — Translate an element by an offset (or to absolute coordinates). Units are supported (e.g., `10mm`, `2in`).
+- `elements scale INDEX FACTOR` — Scale an element by a numeric factor.
+- `elements rotate INDEX ANGLE` — Rotate an element by an angle (e.g., `90deg`, `1.57rad`).
+- `elements align MODE` — Align selected elements. Modes: `left`, `right`, `top`, `bottom`, `center`, `centerh`, `centerv`.
+- `elements group [-l LABEL]` — Group selected elements together with an optional label.
+- `elements ungroup` — Ungroup the currently selected group elements.
 
 ### `operations` — Laser operation management
 
-Add, classify, and configure operations that map elements to laser actions.
+Add, classify, configure, delete, and clear operations that map elements to laser actions.
 
 - `operations list` — List operations.
 - `operations add TYPE` — Add an operation: `cut`, `engrave`, `raster`, `image`, or `dots`.
 - `operations classify` — Classify elements into operations.
 - `operations declassify` — Remove element-to-operation assignments.
 - `operations set INDEX KEY VALUE` — Set a property on an operation by index.
+- `operations delete INDEX` — Delete the operation at the given index.
+- `operations clear` — Remove all operations.
 
 ### `device` — Device control and status
 

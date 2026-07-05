@@ -142,6 +142,63 @@ class TestCLISubprocess(unittest.TestCase):
         self.assertIsInstance(list_result, list)
         self.assertGreater(len(list_result), 0)
 
+    def test_elements_transformations_cli(self):
+        path = os.path.join(self.temp_dir, "mk_e2e_trans.svg")
+        
+        # 1. Add elements
+        self._json(["-p", path, "elements", "circle", "0in", "0in", "1in"])
+        self._json(["-p", path, "elements", "circle", "2in", "2in", "1in"])
+        
+        # 2. Translate
+        res = self._json(["-p", path, "elements", "translate", "0", "10mm", "20mm"])
+        self.assertTrue(res["translated"])
+        self.assertEqual(res["index"], 0)
+        
+        # 3. Scale
+        res = self._json(["-p", path, "elements", "scale", "1", "2.0"])
+        self.assertTrue(res["scaled"])
+        self.assertEqual(res["index"], 1)
+        
+        # 4. Rotate
+        res = self._json(["-p", path, "elements", "rotate", "0", "90deg"])
+        self.assertTrue(res["rotated"])
+        self.assertEqual(res["index"], 0)
+        
+        # 5. Align
+        res = self._json(["-p", path, "elements", "align", "center"])
+        self.assertTrue(res["aligned"])
+        self.assertEqual(res["num_elements"], 2)
+        
+        # 6. Group & Ungroup
+        res = self._json(["-p", path, "elements", "group", "-l", "MyGroup"])
+        self.assertTrue(res["grouped"])
+        self.assertEqual(res["num_elements"], 2)
+        
+        res = self._json(["-p", path, "elements", "ungroup"])
+        self.assertTrue(res["ungrouped"])
+
+    def test_operations_management_cli(self):
+        path = os.path.join(self.temp_dir, "mk_e2e_ops.svg")
+        
+        # 1. Add operations
+        res = self._json(["-p", path, "operations", "add", "cut"])
+        self.assertTrue(res["added"])
+        self.assertEqual(res["type"], "cut")
+        
+        res = self._json(["-p", path, "operations", "add", "engrave"])
+        self.assertTrue(res["added"])
+        self.assertEqual(res["type"], "engrave")
+        
+        # 2. Delete operation
+        res = self._json(["-p", path, "operations", "delete", "0"])
+        self.assertTrue(res["deleted"])
+        self.assertEqual(res["index"], 0)
+        
+        # 3. Clear operations
+        res = self._json(["-p", path, "operations", "clear"])
+        self.assertTrue(res["cleared"])
+        self.assertEqual(res["total_ops"], 0)
+
 
 class TestBackendE2E(unittest.TestCase):
     def setUp(self):

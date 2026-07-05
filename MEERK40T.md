@@ -55,8 +55,8 @@ kernel instance (the same code path as `meerk40t -z`) and drives it via
 ## CLI Command Groups
 
 1. `project` — new, open, save, info, close (SVG project files)
-2. `elements` — add shapes (circle, rect, line, text, etc.), list, select, delete
-3. `operations` — list/add/set cut/engrave/raster/image ops, classify elements
+2. `elements` — add shapes (circle, rect, line, text, etc.), list, select, delete, translate, scale, rotate, align, group, ungroup
+3. `operations` — list/add/set cut/engrave/raster/image ops, classify elements, delete, clear
 4. `device` — list, activate, status, home, move
 5. `export` — render SVG/PNG/DXF via the real backend
 6. `console` — pass-through to the raw kernel console (escape hatch)
