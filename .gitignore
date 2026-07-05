@@ -9,4 +9,4 @@ build/
 .tox/
 .coverage
 .pytest_cache/
-.mypy_cache/.omp/skills/
+.mypy_cache/
