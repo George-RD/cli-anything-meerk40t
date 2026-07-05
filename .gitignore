@@ -9,4 +9,5 @@ build/
 .tox/
 .coverage
 .pytest_cache/
-.mypy_cache/.omp/extensions/
+.mypy_cache/
+.omp/extensions/
