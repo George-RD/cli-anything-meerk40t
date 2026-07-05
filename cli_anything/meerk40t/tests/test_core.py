@@ -206,6 +206,20 @@ class TestOperations(BackendTestCase):
         self.assertTrue(result["classified"])
         self.assertGreater(self.backend.op_count(), 0)
 
+    def test_delete_operation(self):
+        operations.add_operation(self.backend, "cut")
+        before = self.backend.op_count()
+        res = operations.delete_operation(self.backend, 0)
+        self.assertTrue(res["deleted"])
+        self.assertEqual(self.backend.op_count(), before - 1)
+
+    def test_clear_operations(self):
+        operations.add_operation(self.backend, "cut")
+        operations.add_operation(self.backend, "engrave")
+        res = operations.clear_operations(self.backend)
+        self.assertTrue(res["cleared"])
+        self.assertEqual(self.backend.op_count(), 0)
+
 
 class TestSession(unittest.TestCase):
     def setUp(self):
@@ -269,6 +283,100 @@ class TestExport(BackendTestCase):
         with self.assertRaises(RuntimeError) as ctx:
             export.export_png(self.backend, self.temp_path("export.png"))
         self.assertIn("render-op/make_raster", str(ctx.exception))
+
+
+class TestGeometryTransforms(BackendTestCase):
+    def test_translate_element(self):
+        from meerk40t.core.units import Length
+        elements.add_circle(self.backend, "1in", "1in", "1in")
+        res = elements.translate_element(self.backend, 0, "10mm", "20mm")
+        self.assertTrue(res["translated"])
+        self.assertEqual(res["index"], 0)
+        self.assertAlmostEqual(res["after"]["x"] - res["before"]["x"], float(Length("10mm")))
+        
+    def test_scale_element(self):
+        elements.add_circle(self.backend, "1in", "1in", "1in")
+        res = elements.scale_element(self.backend, 0, "2.0")
+        self.assertTrue(res["scaled"])
+        self.assertAlmostEqual(res["after"]["scale_x"], res["before"]["scale_x"] * 2.0)
+        
+    def test_rotate_element(self):
+        elements.add_rect(self.backend, "0in", "0in", "1in", "1in")
+        res = elements.rotate_element(self.backend, 0, "90deg")
+        self.assertTrue(res["rotated"])
+        import math
+        self.assertAlmostEqual(abs(res["after_rotation"] - res["before_rotation"]), math.pi / 2, places=3)
+
+    def test_align_elements(self):
+        elements.add_circle(self.backend, "0in", "0in", "1in")
+        elements.add_circle(self.backend, "2in", "2in", "1in")
+        res = elements.align_elements(self.backend, "center", indexes=[0, 1])
+        self.assertTrue(res["aligned"])
+        self.assertEqual(res["num_elements"], 2)
+
+    def test_group_ungroup(self):
+        elements.add_circle(self.backend, "0in", "0in", "1in")
+        elements.add_circle(self.backend, "2in", "2in", "1in")
+        res = elements.group_elements(self.backend, "MyGroup", indexes=[0, 1])
+        self.assertTrue(res["grouped"])
+        
+        res = elements.ungroup_elements(self.backend)
+        self.assertTrue(res["ungrouped"])
+
+
+class TestREPLDispatch(BackendTestCase):
+    def test_dispatch_repl_commands(self):
+        from cli_anything.meerk40t.meerk40t_cli import _dispatch_repl
+        import click
+        from unittest.mock import patch
+        
+        # Add elements
+        elements.add_circle(self.backend, "1in", "1in", "1in")
+        
+        class DummyContext(click.Context):
+            def __init__(self, backend):
+                self.obj = {"backend": backend, "session": None}
+                
+            def exit(self, code=0):
+                pass
+                
+        ctx = DummyContext(self.backend)
+        
+        # We patch _emit inside meerk40t_cli.py
+        with patch("cli_anything.meerk40t.meerk40t_cli._emit") as mock_emit:
+            # 1. translate
+            _dispatch_repl(ctx, "elements translate 0 10mm 20mm", None, {})
+            mock_emit.assert_called_once()
+            res = mock_emit.call_args[0][1]
+            self.assertTrue(res["translated"])
+            self.assertEqual(res["index"], 0)
+            mock_emit.reset_mock()
+            
+            # 2. scale
+            _dispatch_repl(ctx, "elements scale 0 2.5", None, {})
+            mock_emit.assert_called_once()
+            res = mock_emit.call_args[0][1]
+            self.assertTrue(res["scaled"])
+            self.assertEqual(res["index"], 0)
+            mock_emit.reset_mock()
+            
+            # 3. rotate
+            _dispatch_repl(ctx, "elements rotate 0 45deg", None, {})
+            mock_emit.assert_called_once()
+            res = mock_emit.call_args[0][1]
+            self.assertTrue(res["rotated"])
+            self.assertEqual(res["index"], 0)
+            mock_emit.reset_mock()
+            
+            # 4. delete operation
+            operations.add_operation(self.backend, "cut")
+            before_ops = self.backend.op_count()
+            _dispatch_repl(ctx, "operations delete 0", None, {})
+            mock_emit.assert_called_once()
+            res = mock_emit.call_args[0][1]
+            self.assertTrue(res["deleted"])
+            self.assertEqual(self.backend.op_count(), before_ops - 1)
+            mock_emit.reset_mock()
 
 
 if __name__ == "__main__":

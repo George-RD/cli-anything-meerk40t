@@ -56,6 +56,16 @@ cli-anything-meerk40t -p /tmp/job.svg elements list
 cli-anything-meerk40t operations list
 cli-anything-meerk40t operations add cut
 cli-anything-meerk40t operations classify
+cli-anything-meerk40t operations delete 0
+cli-anything-meerk40t operations clear
+
+# Transformations, Alignment, and Grouping
+cli-anything-meerk40t -p /tmp/job.svg elements translate 0 10mm 20mm
+cli-anything-meerk40t -p /tmp/job.svg elements scale 1 2.0
+cli-anything-meerk40t -p /tmp/job.svg elements rotate 0 90deg
+cli-anything-meerk40t -p /tmp/job.svg elements align center
+cli-anything-meerk40t -p /tmp/job.svg elements group -l MyGroup
+cli-anything-meerk40t -p /tmp/job.svg elements ungroup
 
 # Export via the real backend
 cli-anything-meerk40t export svg /tmp/out.svg
@@ -97,8 +107,8 @@ cli-anything-meerk40t -s /tmp/session.json session undo
 | Group | Description |
 |---|---|
 | `project` | New, open, save, info, close (SVG project files) |
-| `elements` | Circle, rect, ellipse, line, polyline, text, list, delete, select, clear, frame |
-| `operations` | List, add (cut/engrave/raster/image/dots), classify, declassify, set |
+| `elements` | Circle, rect, ellipse, line, polyline, text, list, delete, select, clear, frame, translate, scale, rotate, align, group, ungroup |
+| `operations` | List, add (cut/engrave/raster/image/dots), classify, declassify, set, delete, clear |
 | `device` | List, status, home, physical-home, move, info |
 | `export` | SVG, SVGZ (real backend); PNG (GUI-dependent); G-code (GRBL device required) |
 | `console` | Raw passthrough to the MeerK40t kernel console |

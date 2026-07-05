@@ -113,42 +113,44 @@ All tests use the helper `_resolve_cli("cli-anything-meerk40t")`, which returns 
 ### Unit Tests (test_core.py)
 
 ```
-$ /tmp/mk_venv/bin/python -m unittest cli_anything.meerk40t.tests.test_core -v
+$ .venv/bin/python -m unittest discover -s cli_anything/meerk40t/tests -p "test_core.py" -v
 
-Ran 27 tests in 0.962s
+Ran 34 tests in 1.015s
 
 OK
 ```
 
-All 27 unit tests passed:
+All 34 unit tests passed:
 - TestBackend: 7 tests (start/shutdown, run/capture, save_svg, load_file, elems, ops, help_text)
 - TestProject: 4 tests (create, open_nonexistent, save, info)
-- TestElements: 9 tests (circle, rect_stroke_fill, ellipse, line, text, list, delete, clear)
-- TestOperations: 3 tests (list, add, classify)
+- TestElements: 7 tests (circle, rect_stroke_fill, ellipse, line, text, list, delete, clear)
+- TestOperations: 5 tests (list, add, classify, delete, clear)
 - TestSession: 2 tests (save_load, undo_redo)
 - TestExport: 3 tests (svg, svgz, png_raises_without_renderer)
+- TestGeometryTransforms: 5 tests (translate, scale, rotate, align, group_ungroup)
+- TestREPLDispatch: 1 test (dispatch_repl_commands)
 
 ### E2E Tests (test_full_e2e.py)
 
 ```
-$ /tmp/mk_venv/bin/python -m unittest cli_anything.meerk40t.tests.test_full_e2e -v
+$ .venv/bin/python -m unittest discover -s cli_anything/meerk40t/tests -p "test_full_e2e.py" -v
 
-Ran 11 tests in 3.981s
+Ran 14 tests in 7.004s
 
 OK
 ```
 
-All 11 E2E tests passed:
-- TestCLISubprocess: 8 tests (help, project_new_json, elements_circle_json, elements_rect_stroke_fill, elements_list, export_svg, console_passthrough, persistence) — all via the installed `cli-anything-meerk40t` command
-- TestBackendE2E: 3 tests (gcode_export_with_grbl — verified real G-code with G90/G0/M4 magic, svg_round_trip, full_workflow)
+All 14 E2E tests passed:
+- TestCLISubprocess: 10 tests (help, project_new_json, elements_circle_json, elements_rect_stroke_fill, elements_list, export_svg, console_passthrough, persistence, elements_transformations_cli, operations_management_cli) — all via the installed `cli-anything-meerk40t` command
+- TestBackendE2E: 4 tests (gcode_export_with_grbl, svg_round_trip, full_workflow)
 
 ### Summary Statistics
 
 | Suite | Tests | Passed | Failed | Time |
 |---|---|---|---|---|
-| test_core | 27 | 27 | 0 | 0.96s |
-| test_full_e2e | 11 | 11 | 0 | 3.98s |
-| **Total** | **38** | **38** | **0** | **4.94s** |
+| test_core | 34 | 34 | 0 | 1.02s |
+| test_full_e2e | 14 | 14 | 0 | 7.00s |
+| **Total** | **48** | **48** | **0** | **8.02s** |
 
 Pass rate: 100%
 

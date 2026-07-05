@@ -386,6 +386,76 @@ def elements_frame(ctx: click.Context):
     _emit(ctx, elements_mod.frame(ctx.obj["backend"]))
 
 
+@elements.command("translate")
+@click.argument("index", type=int)
+@click.argument("tx")
+@click.argument("ty")
+@click.option("--absolute", "-a", is_flag=True, help="Translate to absolute coordinates.")
+@click.pass_context
+@mutating
+def elements_translate(ctx: click.Context, index: int, tx: str, ty: str, absolute: bool):
+    """Translate an element."""
+    _emit(ctx, elements_mod.translate_element(ctx.obj["backend"], index, tx, ty, absolute=absolute))
+
+
+@elements.command("scale")
+@click.argument("index", type=int)
+@click.argument("scale_x")
+@click.argument("scale_y", required=False, default=None)
+@click.option("--absolute", "-a", is_flag=True, help="Scale to absolute size.")
+@click.option("--px", "-x", default=None, help="Origin X coordinate for scaling.")
+@click.option("--py", "-y", default=None, help="Origin Y coordinate for scaling.")
+@click.pass_context
+@mutating
+def elements_scale(ctx: click.Context, index: int, scale_x: str, scale_y: str | None, absolute: bool, px: str | None, py: str | None):
+    """Scale an element."""
+    _emit(ctx, elements_mod.scale_element(ctx.obj["backend"], index, scale_x, scale_y, absolute=absolute, px=px, py=py))
+
+
+@elements.command("rotate")
+@click.argument("index", type=int)
+@click.argument("angle")
+@click.option("--absolute", "-a", is_flag=True, help="Rotate to absolute angle.")
+@click.option("--cx", "-x", default=None, help="Rotation center X.")
+@click.option("--cy", "-y", default=None, help="Rotation center Y.")
+@click.pass_context
+@mutating
+def elements_rotate(ctx: click.Context, index: int, angle: str, absolute: bool, cx: str | None, cy: str | None):
+    """Rotate an element."""
+    _emit(ctx, elements_mod.rotate_element(ctx.obj["backend"], index, angle, absolute=absolute, cx=cx, cy=cy))
+
+
+ALIGN_CHOICES = click.Choice(["left", "right", "top", "bottom", "center", "centerh", "centerv"])
+
+@elements.command("align")
+@click.argument("mode", type=ALIGN_CHOICES)
+@click.option("--index", "-i", "indexes", type=int, multiple=True, help="Element index to align.")
+@click.pass_context
+@mutating
+def elements_align(ctx: click.Context, mode: str, indexes: tuple[int, ...]):
+    """Align elements."""
+    _emit(ctx, elements_mod.align_elements(ctx.obj["backend"], mode, indexes=list(indexes) if indexes else None))
+
+
+@elements.command("group")
+@click.option("--label", "-l", default=None, help="Optional label for the group.")
+@click.option("--index", "-i", "indexes", type=int, multiple=True, help="Element index to group.")
+@click.pass_context
+@mutating
+def elements_group(ctx: click.Context, label: str | None, indexes: tuple[int, ...]):
+    """Group elements."""
+    _emit(ctx, elements_mod.group_elements(ctx.obj["backend"], label, indexes=list(indexes) if indexes else None))
+
+
+@elements.command("ungroup")
+@click.option("--index", "-i", type=int, default=None, help="Index of group/file node to ungroup.")
+@click.pass_context
+@mutating
+def elements_ungroup(ctx: click.Context, index: int | None):
+    """Ungroup elements."""
+    _emit(ctx, elements_mod.ungroup_elements(ctx.obj["backend"], index=index))
+
+
 # ── Operation commands ────────────────────────────────────────────────────────
 
 
@@ -435,6 +505,23 @@ def operations_declassify(ctx: click.Context):
 def operations_set(ctx: click.Context, index: int, key: str, value: str):
     """Set an operation property."""
     _emit(ctx, operations_mod.set_operation(ctx.obj["backend"], index, key, value))
+
+
+@operations.command("delete")
+@click.argument("index", type=int)
+@click.pass_context
+@mutating
+def operations_delete(ctx: click.Context, index: int):
+    """Delete an operation by index."""
+    _emit(ctx, operations_mod.delete_operation(ctx.obj["backend"], index))
+
+
+@operations.command("clear")
+@click.pass_context
+@mutating
+def operations_clear(ctx: click.Context):
+    """Clear all operations."""
+    _emit(ctx, operations_mod.clear_operations(ctx.obj["backend"]))
 
 
 # ── Device commands ───────────────────────────────────────────────────────────
@@ -740,6 +827,98 @@ def _dispatch_repl(ctx: click.Context, line: str, skin: ReplSkin, commands: dict
                 result = elements_mod.clear_elements(backend)
             elif sub == "frame":
                 result = elements_mod.frame(backend)
+            elif sub == "translate":
+                index = int(args[0])
+                tx = args[1]
+                ty = args[2]
+                absolute = "--absolute" in args or "-a" in args
+                result = elements_mod.translate_element(backend, index, tx, ty, absolute=absolute)
+            elif sub == "scale":
+                index = int(args[0])
+                scale_x = args[1]
+                scale_y = None
+                absolute = False
+                px = None
+                py = None
+                rem = args[2:]
+                if rem and not rem[0].startswith("-"):
+                    scale_y = rem[0]
+                    rem = rem[1:]
+                i = 0
+                while i < len(rem):
+                    opt = rem[i]
+                    if opt in ("--absolute", "-a"):
+                        absolute = True
+                        i += 1
+                    elif opt in ("-x", "--px") and i + 1 < len(rem):
+                        px = rem[i+1]
+                        i += 2
+                    elif opt in ("-y", "--py") and i + 1 < len(rem):
+                        py = rem[i+1]
+                        i += 2
+                    else:
+                        i += 1
+                result = elements_mod.scale_element(backend, index, scale_x, scale_y, absolute=absolute, px=px, py=py)
+            elif sub == "rotate":
+                index = int(args[0])
+                angle = args[1]
+                absolute = False
+                cx = None
+                cy = None
+                rem = args[2:]
+                i = 0
+                while i < len(rem):
+                    opt = rem[i]
+                    if opt in ("--absolute", "-a"):
+                        absolute = True
+                        i += 1
+                    elif opt in ("-x", "--cx") and i + 1 < len(rem):
+                        cx = rem[i+1]
+                        i += 2
+                    elif opt in ("-y", "--cy") and i + 1 < len(rem):
+                        cy = rem[i+1]
+                        i += 2
+                    else:
+                        i += 1
+                result = elements_mod.rotate_element(backend, index, angle, absolute=absolute, cx=cx, cy=cy)
+            elif sub == "align":
+                mode = args[0]
+                indexes = []
+                rem = args[1:]
+                i = 0
+                while i < len(rem):
+                    if rem[i] in ("-i", "--index") and i + 1 < len(rem):
+                        indexes.append(int(rem[i+1]))
+                        i += 2
+                    else:
+                        i += 1
+                result = elements_mod.align_elements(backend, mode, indexes=indexes if indexes else None)
+            elif sub == "group":
+                label = None
+                indexes = []
+                rem = args
+                i = 0
+                while i < len(rem):
+                    if rem[i] in ("-l", "--label") and i + 1 < len(rem):
+                        label = rem[i+1]
+                        i += 2
+                    elif rem[i] in ("-i", "--index") and i + 1 < len(rem):
+                        indexes.append(int(rem[i+1]))
+                        i += 2
+                    else:
+                        i += 1
+                result = elements_mod.group_elements(backend, label, indexes=indexes if indexes else None)
+            elif sub == "ungroup":
+                index = None
+                rem = args
+                i = 0
+                while i < len(rem):
+                    if rem[i] in ("-i", "--index") and i + 1 < len(rem):
+                        index = int(rem[i+1])
+                        i += 2
+                    else:
+                        i += 1
+                result = elements_mod.ungroup_elements(backend, index=index)
             else:
                 result = {"error": f"Unknown elements command: {sub}"}
         elif group == "operations":
@@ -755,6 +934,10 @@ def _dispatch_repl(ctx: click.Context, line: str, skin: ReplSkin, commands: dict
                 result = operations_mod.declassify_elements(backend)
             elif sub == "set":
                 result = operations_mod.set_operation(backend, int(args[0]), args[1], args[2])
+            elif sub == "delete":
+                result = operations_mod.delete_operation(backend, int(args[0]))
+            elif sub == "clear":
+                result = operations_mod.clear_operations(backend)
             else:
                 result = {"error": f"Unknown operations command: {sub}"}
         elif group == "device":
