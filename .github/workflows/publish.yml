@@ -1,0 +1,43 @@
+name: Publish to PyPI
+
+on:
+  push:
+    tags:
+      - "v*"
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write  # Required for OIDC trusted publishing
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install build tools
+        run: pip install build
+
+      - name: Build sdist and wheel
+        run: python -m build
+
+      - name: Verify package
+        run: |
+          pip install twine
+          twine check dist/*
+
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+        # OIDC trusted publishing — no API token needed.
+        # Configure the trusted publisher at:
+        # https://pypi.org/manage/project/cli-anything-meerk40t/settings/publishing/
+        # with:
+        #   PyPI Project Name: cli-anything-meerk40t
+        #   Owner: George-RD
+        #   Repository: cli-anything-meerk40t
+        #   Workflow filename: publish.yml
+        #   Environment: (leave blank or set to "pypi")
+        with:
+          print-hash: true
