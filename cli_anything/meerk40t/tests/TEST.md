@@ -10,8 +10,11 @@ All tests use the Python standard library `unittest` module (no pytest). The bac
 
 | File | Count | Scope |
 |------|-------|-------|
-| `tests/test_core.py` | 69 unit tests | Backend wrapper, project, elements, operations, session, export, device, serial/GRBL probe parsers, profile overlay, export guard, and CLI device/machine command-suite wiring in isolation. |
+| `tests/test_core.py` | 94 unit tests | Backend wrapper, project, elements, operations, session, export, device, serial/GRBL probe parsers, profile overlay, export guard, CLI device/machine command-suite wiring, and packaged-skill integrity. |
+| `tests/test_mk_plugin.py` | 12 unit tests | MeerK40t back-fill bridge plugin: behavioural upstream detection, `set` replacement, handover transforms, patch idempotence, runtime web-server patch. |
 | `tests/test_full_e2e.py` | 13 E2E tests | CLI subprocess workflows, backend round-trips, and realistic laser-job scenarios. |
+
+Total: 106 unit + 13 E2E = 119 tests.
 
 Both test modules create fresh backends in `setUp` and tear them down in `tearDown`. E2E tests that exercise the installed CLI also fall back to `python -m cli_anything.meerk40t.meerk40t_cli` if the console script is not on `PATH`.
 
@@ -156,7 +159,7 @@ Ran 69 tests in 1.740s
 OK
 ```
 
-All 69 unit tests passed:
+All unit tests passed (historical run at 69-test inventory; current inventory above):
 - TestBackend: 7 tests (start/shutdown, run/capture, save_svg, load_file, elems, ops, help_text)
 - TestProject: 4 tests (create, open_nonexistent, save, info)
 - TestElements: 8 tests (circle, rect_stroke_fill, ellipse, line, text, list, delete, clear)
