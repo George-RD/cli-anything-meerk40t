@@ -10,8 +10,11 @@ All tests use the Python standard library `unittest` module (no pytest). The bac
 
 | File | Count | Scope |
 |------|-------|-------|
-| `tests/test_core.py` | 69 unit tests | Backend wrapper, project, elements, operations, session, export, device, serial/GRBL probe parsers, profile overlay, export guard, and CLI device/machine command-suite wiring in isolation. |
+| `tests/test_core.py` | 94 unit tests | Backend wrapper, project, elements, operations, session, export, device, serial/GRBL probe parsers, profile overlay, export guard, CLI device/machine command-suite wiring, and packaged-skill integrity. |
+| `tests/test_mk_plugin.py` | 14 unit tests | MeerK40t back-fill bridge plugin: behavioural upstream detection, `set` replacement, handover transforms, patch idempotence, runtime web-server patch. |
 | `tests/test_full_e2e.py` | 13 E2E tests | CLI subprocess workflows, backend round-trips, and realistic laser-job scenarios. |
+
+Total: 108 unit + 13 E2E = 121 tests.
 
 Both test modules create fresh backends in `setUp` and tear them down in `tearDown`. E2E tests that exercise the installed CLI also fall back to `python -m cli_anything.meerk40t.meerk40t_cli` if the console script is not on `PATH`.
 
@@ -111,12 +114,12 @@ All tests use the helper `_resolve_cli("cli-anything-meerk40t")`, which returns 
 
 ## 3b. Bridge Plugin Suite (`test_mk_plugin.py`)
 
-12 tests covering the MeerK40t back-fill bridge plugin: behavioural upstream
+14 tests covering the MeerK40t back-fill bridge plugin: behavioural upstream
 detection, console `set` replacement (typed values, feedback, `-p` path flag),
 console/web server handover transforms, patch idempotence and failure
 isolation, and the runtime web-server patch against a real temp module.
-Together with `test_core.py` (94) this makes 106 unit tests; `test_full_e2e.py`
-adds 13 E2E tests (119 total).
+Together with `test_core.py` (94) this makes 108 unit tests; `test_full_e2e.py`
+adds 13 E2E tests (121 total).
 
 ## 4. Realistic Workflow Scenarios
 
@@ -139,8 +142,9 @@ adds 13 E2E tests (119 total).
 ## Running the tests
 
 ```bash
-/tmp/mk_venv/bin/python -m unittest cli_anything.meerk40t.tests.test_core -v
-/tmp/mk_venv/bin/python -m unittest cli_anything.meerk40t.tests.test_full_e2e -v
+.venv/bin/python -m unittest cli_anything.meerk40t.tests.test_core -v
+.venv/bin/python -m unittest cli_anything.meerk40t.tests.test_mk_plugin -v
+.venv/bin/python -m unittest cli_anything.meerk40t.tests.test_full_e2e -v
 ```
 
 
@@ -156,7 +160,7 @@ Ran 69 tests in 1.740s
 OK
 ```
 
-All 69 unit tests passed:
+All unit tests passed (historical run at 69-test inventory; current inventory above):
 - TestBackend: 7 tests (start/shutdown, run/capture, save_svg, load_file, elems, ops, help_text)
 - TestProject: 4 tests (create, open_nonexistent, save, info)
 - TestElements: 8 tests (circle, rect_stroke_fill, ellipse, line, text, list, delete, clear)
@@ -196,9 +200,10 @@ All 13 E2E tests passed:
 
 | Suite | Tests | Passed | Failed | Time |
 |---|---|---|---|---|
-| test_core | 69 | 69 | 0 | 1.740s |
-| test_full_e2e | 13 | 13 | 0 | 8.83s |
-| **Total** | **82** | **82** | **0** | **10.57s** |
+| test_core | 94 | 94 | 0 | 2.41s |
+| test_mk_plugin | 14 | 14 | 0 | 0.10s |
+| test_full_e2e | 13 | 13 | 0 | 7.52s |
+| **Total** | **121** | **121** | **0** | **10.03s** |
 
 Pass rate: 100%
 
