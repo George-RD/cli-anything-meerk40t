@@ -54,6 +54,16 @@ later passes, never down.
 
 Use `operations set <id> power <n> speed <mm/min>` to tune each operation.
 
+### Field-verified data points
+
+| Machine | Material | Operation | Result |
+|---|---|---|---|
+| Sculpfun S9 (5.5W diode) | 350gsm kraft card | Vector engrave, 1500 mm/min, 10/15/20% power ladder | All three visible; monotonic intensity increase with power. Relative intensity only: grayscale linearity and repeatability not yet tested. |
+
+A 3-square power ladder (20mm squares, one power step apart) is a cheap first
+test on any new material. It proves the power axis works and gives a starting
+point in one burn.
+
 ## GRBL preflight meaning
 
 `device check` connects and reads the controller settings. Know what they mean:
