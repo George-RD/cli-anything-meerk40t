@@ -35,7 +35,8 @@ cli-anything-meerk40t --machine sculpfun-s9 --port /dev/cu.usbserial-10 device c
 cli-anything-meerk40t --json project new --project /tmp/job.svg
 cli-anything-meerk40t --json --project /tmp/job.svg elements rect 80mm 50mm 10mm 10mm
 cli-anything-meerk40t --json --project /tmp/job.svg operations classify
-cli-anything-meerk40t --json --project /tmp/job.svg operations set 0 power 15 speed 1500
+cli-anything-meerk40t --json --project /tmp/job.svg operations set 0 power 150
+cli-anything-meerk40t --json --project /tmp/job.svg operations set 0 speed 25
 
 # 4. Frame the placement. OPERATOR MUST BE PRESENT: the beam is live once connected.
 cli-anything-meerk40t --machine sculpfun-s9 --port /dev/cu.usbserial-10 device frame 10 10 80 50 --feed 1500
