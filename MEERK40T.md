@@ -136,3 +136,32 @@ Follow in order. Do not skip steps.
 1. Operator wears laser glasses; material placed and focused.
 2. Re-frame at the burn location for final placement confirmation.
 3. Start conservative (15% power) and increase, never the reverse.
+
+## GUI-visible operation (operator watches, agent controls)
+
+Use when the operator wants to see the job on the MeerK40t canvas and own
+the GUI stop/pause buttons while the agent drives everything remotely.
+Requires the patched MeerK40t (branch `fix_console_server_handover`):
+handover resolved at execution time, typed `set` values, `set` feedback.
+
+1. Write a boot batch file: line 1 `consoleserver -p 2323`, line 2
+   `load /path/job.svg`. Launch `meerk40t -b bootfile`.
+2. Connect over TCP (telnet-style, one command per connection works).
+   With the patch, element commands are safe; unpatched, NEVER send
+   element-mutating commands remotely (GUI segfault).
+3. Configure the device with an explicit context path:
+   `set -p grbl serial_port /dev/cu.usbserial-10`, `set -p grbl baud_rate
+   115200`, `set -p grbl bedwidth 410mm`, `set -p grbl bedheight 400mm`.
+   Bare `set` targets the root context and does nothing to the device.
+4. `flush` after config. Bed-size changes need a GUI restart to rebuild
+   the coordinate view (the realize signal cannot be triggered remotely).
+5. Open the serial link by sending any G-code query: `gcode $I` (the
+   controller opens the port on demand). Verify with the operator that
+   the machine responded; queue echo alone is not proof.
+6. Motion the operator should see: use driver commands (`move_absolute
+   0mm 400mm`) or spooled jobs — these update the canvas position dot.
+   Raw `gcode G0 ...` moves the machine but is INVISIBLE to the GUI;
+   reserve raw `gcode` for GRBL housekeeping (`$` queries, resets).
+7. Coordinate conventions: canvas ruler 0 is top-left (design space);
+   the machine position dot sits at scene bottom-left = machine (0,0) =
+   front-left of the physical machine. Flip Y maps between them.
