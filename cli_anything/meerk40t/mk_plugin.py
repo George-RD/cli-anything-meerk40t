@@ -43,8 +43,9 @@ from meerk40t.kernel import _
 # Upstream pull request that introduces these fixes permanently.
 UPSTREAM_PR = "#3249"
 
-# Installed meerk40t at or beyond this version is assumed to carry the fixes.
-UPSTREAM_FIXED_VERSION = (0, 9, 9001)
+# PR #3249 is not merged upstream yet; no released version carries the
+# fixes. Once it ships, set this to that release to fast-path detection.
+UPSTREAM_FIXED_VERSION = None
 
 # Names of the three independent patches, used for status tracking.
 PATCH_HANDOVER = "console-handover"
@@ -90,10 +91,29 @@ def _version_tuple(value):
 
 
 def _upstream_fixed():
-    installed = _meerk40t_version()
-    if installed is None:
+    """True only when the installed meerk40t demonstrably has the fixes.
+
+    Version fast path applies only once UPSTREAM_FIXED_VERSION names a real
+    release. Otherwise detect behaviourally: the fixed console_server defines
+    an execution-time find_handover, and the fixed set_command reports
+    unknown attributes ("No such attribute").
+    """
+    if UPSTREAM_FIXED_VERSION is not None:
+        installed = _meerk40t_version()
+        if installed is not None:
+            if _version_tuple(installed) >= UPSTREAM_FIXED_VERSION:
+                return True
+    try:
+        from meerk40t.network import console_server
+
+        src = inspect.getsource(console_server)
+        if "find_handover" not in src:
+            return False
+        from meerk40t.kernel import kernel as kernel_mod
+
+        return "No such attribute" in inspect.getsource(kernel_mod)
+    except Exception:
         return False
-    return _version_tuple(installed) >= UPSTREAM_FIXED_VERSION
 
 
 def _patch_status(kernel):
@@ -322,9 +342,14 @@ def _register_fixed_set(kernel):
         kernel.console_command_remove("set")
     except Exception:
         pass
-    kernel.console_command("set", help="set [<key> <value>] : " + _("set or list variables"))(
-        set_command
-    )
+    # Replicate the upstream decorator stack (bottom-up): the command
+    # registration first, then the -p path option annotation on top.
+    registered = kernel.console_command(
+        "set", help="set [<key> <value>] : " + _("set or list variables")
+    )(set_command)
+    kernel.console_option(
+        "path", "p", type=str, help=_("Path of variable to set.")
+    )(registered)
 
 
 def _patch_set_typed(kernel, channel):

@@ -136,6 +136,13 @@ class Meerk40tBackend:
             from meerk40t.rotary import rotary
             kernel.add_plugin(rotary.plugin)
 
+            # The bridge plugin back-fills the meerk40t/meerk40t#3249 fixes
+            # (typed console `set`, set feedback, console-server handover).
+            # Real `meerk40t` launches load it via the meerk40t.extension
+            # entry point; this fixed plugin list must add it explicitly.
+            from cli_anything.meerk40t import mk_plugin
+            kernel.add_plugin(mk_plugin.plugin)
+
             kernel(partial=True)
             kernel.console("channel print console\n")
 

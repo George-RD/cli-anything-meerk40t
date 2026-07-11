@@ -69,6 +69,11 @@ class BridgePluginTest(unittest.TestCase):
 
         self._orig_cs_plugin = cs.plugin
         self._orig_cs_marker = getattr(cs, "_cli_anything_patched_plugin", False)
+        # These tests simulate a broken (stock) meerk40t; the behavioural
+        # upstream-fixed detection would otherwise see the patched editable
+        # install in this venv and skip every patch.
+        self._orig_upstream_fixed = mk._upstream_fixed
+        mk._upstream_fixed = lambda: False
 
     def tearDown(self):
         import meerk40t.network.console_server as cs
@@ -79,6 +84,7 @@ class BridgePluginTest(unittest.TestCase):
         else:
             if hasattr(cs, "_cli_anything_patched_plugin"):
                 del cs._cli_anything_patched_plugin
+        mk._upstream_fixed = self._orig_upstream_fixed
 
     # -- entry point --------------------------------------------------------
 
