@@ -1,0 +1,122 @@
+name: Profile to PR
+
+# Opens a pull request that adds a community machine profile when an issue
+# is opened, edited, or labelled with `community-profile`. The issue body
+# must contain the profile JSON inside a ```json code block. Invalid JSON is
+# reported back as a comment on the issue; nothing is merged automatically.
+
+on:
+  issues:
+    types: [opened, edited, labeled]
+
+permissions:
+  contents: read
+
+jobs:
+  profile-to-pr:
+    if: >-
+      contains(github.event.issue.labels.*.name, 'community-profile')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate community profile
+        id: validate
+        env:
+          ISSUE_BODY: ${{ github.event.issue.body }}
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+        run: |
+          python3 - <<'PY'
+          import json, os, re, sys
+          body = os.environ["ISSUE_BODY"]
+          num = os.environ["ISSUE_NUMBER"]
+
+          def comment(msg):
+              with open("/tmp/comment.md", "w", encoding="utf-8") as cf:
+                  cf.write(msg)
+              os.system(f"gh issue comment {num} --body-file /tmp/comment.md")
+              with open(os.environ["GITHUB_OUTPUT"], "a") as f:
+                  f.write("valid=false\n")
+
+          m = re.search(r"```(?:json)?\s*(.*?)```", body, re.DOTALL)
+          if not m:
+              comment(
+                  "No ```json code block was found in the issue body. "
+                  "Please paste the complete profile JSON inside a "
+                  "```json ... ``` block."
+              )
+              sys.exit(0)
+
+          try:
+              prof = json.loads(m.group(1))
+          except Exception as e:
+              comment(f"The JSON in the code block is not valid: {e}")
+              sys.exit(0)
+
+          REQUIRED = {
+              "name", "device", "baud", "bedwidth", "bedheight",
+              "has_endstops", "notes", "provenance",
+          }
+          type_of = {
+              "name": str, "device": str, "baud": int, "bedwidth": str,
+              "bedheight": str, "has_endstops": bool, "notes": str,
+              "provenance": dict,
+          }
+          errs = [k for k in REQUIRED if k not in prof]
+          for k, exp in type_of.items():
+              if k not in prof or prof[k] is None:
+                  continue
+              v = prof[k]
+              if exp is int and isinstance(v, bool):
+                  errs.append(f"{k} must be int (got bool)")
+              elif exp is bool and isinstance(v, int) and not isinstance(v, bool):
+                  errs.append(f"{k} must be bool (got int)")
+              elif not isinstance(v, exp):
+                  errs.append(f"{k} must be {exp.__name__}")
+
+          name = prof.get("name")
+          if not isinstance(name, str) or not re.match(
+              r"^[A-Za-z0-9][A-Za-z0-9._-]*$", name or ""
+          ):
+              errs.append("name must be a safe identifier")
+
+          prov = prof.get("provenance")
+          if isinstance(prov, dict) and not prov:
+              errs.append("provenance must not be empty")
+
+          if errs:
+              comment("Profile validation failed:\n- " + "\n- ".join(errs))
+              sys.exit(0)
+
+          os.makedirs("profiles/community", exist_ok=True)
+          path = f"profiles/community/{name}.json"
+          with open(path, "w", encoding="utf-8") as f:
+              json.dump(prof, f, indent=2)
+              f.write("\n")
+          with open(os.environ["GITHUB_OUTPUT"], "a") as f:
+              f.write("valid=true\n")
+              f.write(f"name={name}\n")
+          print(f"Validated profile {name}")
+          PY
+
+      - name: Open pull request
+        if: steps.validate.outputs.valid == 'true'
+        uses: peter-evans/create-pull-request@v7
+        with:
+          commit-message: "Add community profile ${{ steps.validate.outputs.name }}"
+          add-paths: profiles/community/${{ steps.validate.outputs.name }}.json
+          branch: profile/${{ steps.validate.outputs.name }}
+          delete-branch: true
+          title: "Community machine profile: ${{ steps.validate.outputs.name }}"
+          body: |
+            Adds `profiles/community/${{ steps.validate.outputs.name }}.json`
+            from issue #${{ github.event.issue.number }}.
+
+            Submitted values should come from `device setup --save-profile`
+            (live $$ readback), the device state machine, and the firmware
+            banner, and not be guessed.
+          labels: community-profile

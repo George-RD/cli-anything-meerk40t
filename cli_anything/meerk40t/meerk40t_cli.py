@@ -18,6 +18,7 @@ from cli_anything.meerk40t.core import project as project_mod
 from cli_anything.meerk40t.core import session as session_mod
 from cli_anything.meerk40t.utils.meerk40t_backend import Meerk40tBackend
 from cli_anything.meerk40t.utils import profiles as profiles_mod
+from cli_anything.meerk40t.utils import submit as submit_mod
 from cli_anything.meerk40t.utils.repl_skin import ReplSkin
 # Driver choices for --device. Extracted to a module-level var so the
 # skill_generator regex (which chokes on nested parens in decorators) does
@@ -711,6 +712,48 @@ def machine():
 def machine_list(ctx):
     """List available machine profiles (bundled and user)."""
     _emit(ctx, {"profiles": profiles_mod.list_profiles()})
+@cli.group()
+def profile():
+    """Community machine-profile submission."""
+
+
+@profile.command("submit")
+@click.argument("name")
+@click.option("--yes", is_flag=True, default=False, help="Actually submit the profile. Without this flag the command prints the plan and exits; nothing is sent.")
+@click.pass_context
+def profile_submit(ctx, name, yes):
+    """Submit a machine profile to the community collection.
+
+    Loads the named profile, validates it against the community schema, then
+    either opens a pull request via the gh CLI (when installed, authenticated,
+    and --yes is given) or prints the profile JSON and a pre-filled new-issue
+    URL. Nothing is submitted without --yes; without it the command prints
+    what would be sent and the exact command to confirm, leaving consent
+    with the human.
+    """
+    result = submit_mod.submit_profile(name, yes=yes)
+    if not result.get("ok"):
+        _emit(ctx, result)
+        sys.stdout = _REAL_STDOUT
+        ctx.exit(1)
+    if ctx.obj.get("json"):
+        _emit(ctx, result)
+        return
+    click.echo(f"Profile: {result['name']}")
+    click.echo(f"Target file: {result['community_file']}")
+    click.echo("")
+    click.echo("Profile JSON:")
+    click.echo(json.dumps(result["profile"], indent=2))
+    click.echo("")
+    click.echo(f"Pre-filled issue URL:\n{result['issue_url']}")
+    if result.get("confirm_command"):
+        click.echo("")
+        click.echo("To submit via a pull request, run:")
+        click.echo(f"  {result['confirm_command']}")
+    else:
+        click.echo("")
+        click.echo("Install the gh CLI and re-run with --yes to open a PR,")
+        click.echo("or open the issue URL above to submit manually.")
 @device.command("move")
 @click.argument("x")
 @click.argument("y")

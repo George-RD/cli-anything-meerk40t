@@ -1,6 +1,6 @@
 # cli-anything-meerk40t
 
-Agent CLI harness for **MeerK40t** laser cutting/engraving software.
+Agent CLI harness for **MeerK40t** laser software. It is built so an LLM, or a human at a terminal, can take a design from SVG to a physically engraved object through the real MeerK40t kernel.
 
 This is a stateful CLI + REPL that wraps the **real MeerK40t kernel** for
 headless, agent-driven laser job preparation. It exposes project, elements,
@@ -9,10 +9,10 @@ operations, device, export, session, and console-passthrough commands with
 
 ## Install
 
-### 1. Install MeerK40t (the real software — hard dependency)
+### 1. Install MeerK40t (the real software, a hard dependency)
 
 ```bash
-# From source (recommended — pulls all headless deps):
+# From source (recommended: pulls all headless deps):
 git clone https://github.com/meerk40t/meerk40t
 cd meerk40t
 pip install -r requirements-nogui.txt
@@ -148,11 +148,11 @@ session open in the REPL to maintain the link.
 
 ## Export formats
 
-- **SVG** (default, plain, compressed/svgz) — truthful, rendered by the real
+- **SVG** (default, plain, compressed/svgz): truthful, rendered by the real
   MeerK40t SVGWriter. Works headless.
-- **G-code** — generated via the real GRBL `save_job` pipeline. Requires an
+- **G-code**: generated via the real GRBL `save_job` pipeline. Requires an
   active GRBL device (`console 'service device start -i grbl'`).
-- **PNG** — requires wxPython GUI (`render-op/make_raster` is only registered
+- **PNG**: requires wxPython GUI (`render-op/make_raster` is only registered
   by the GUI plugin). Errors clearly in headless mode.
 
 ## How it works
@@ -160,7 +160,7 @@ session open in the REPL to maintain the link.
 The harness boots a headless MeerK40t `Kernel` instance (the same code path as
 `meerk40t -z`) and drives it via `kernel.console()`. Channel output is captured
 via `_console_channel.watch()`. All element/operation/export commands are
-translated to real MeerK40t console commands — this is a wrapper, not a
+translated to real MeerK40t console commands; this is a wrapper, not a
 reimplementation.
 
 ## Testing

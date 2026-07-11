@@ -172,8 +172,13 @@ There is no dedicated burn subcommand. Run the job through the console passthrou
 
 Use when the operator wants to see the job on the MeerK40t canvas and own
 the GUI stop/pause buttons while the agent drives everything remotely.
-Requires the patched MeerK40t (branch `fix_console_server_handover`):
-handover resolved at execution time, typed `set` values, `set` feedback.
+Backed by the cli_anything bridge plugin, which registers through the
+`meerk40t.extension` entry point on `pip install`. The plugin back-fills
+three upstream fixes from MeerK40t pull request #3249 at kernel boot when a
+stock PyPI install lacks them: handover resolved at execution time, typed
+`set` values, and `set` feedback. A frozen application build that bundles a
+fixed MeerK40t is unaffected, and once the upstream release ships the fixes
+permanently the plugin becomes a no-op.
 
 1. Write a boot batch file: line 1 `consoleserver -p 2323`, line 2
    `load /path/job.svg`. Launch `meerk40t -b bootfile`.
@@ -196,3 +201,54 @@ handover resolved at execution time, typed `set` values, `set` feedback.
 7. Coordinate conventions: canvas ruler 0 is top-left (design space);
    the machine position dot sits at scene bottom-left = machine (0,0) =
    front-left of the physical machine. Flip Y maps between them.
+## Community machine profiles
+
+Operators can contribute verified machine profiles to the shared collection
+without writing code. Submission is a CLI command plus a GitHub automation
+that opens a pull request.
+
+### Command: `profile submit NAME`
+
+A top-level `profile` group was chosen over extending the `machine` group:
+`machine` is for selecting a profile to *use* (offline and serial commands),
+whereas `profile submit` is about *contributing* a profile, so the two
+concerns stay separate.
+
+`profile submit NAME` loads the named profile (user or bundled), validates it
+against the community schema, then either opens a pull request (when the `gh`
+CLI is installed and authenticated and `--yes` is given) or prints the
+profile JSON and a pre-filled GitHub new-issue URL.
+
+Nothing is submitted without an explicit `--yes` flag. Without it the command
+prints what would be sent and the exact command to confirm, leaving consent
+with the human. No secrets or tokens are handled client-side; the only
+network action is the operator's own authenticated `gh` session.
+
+```bash
+# Print the plan only; nothing is sent.
+cli-anything-meerk40t profile submit sculpfun-s9
+
+# Actually open a pull request (requires gh installed and authenticated).
+cli-anything-meerk40t profile submit sculpfun-s9 --yes
+```
+
+### Schema and quality bar
+
+Required keys: `name`, `device`, `baud`, `bedwidth`, `bedheight`,
+`has_endstops`, `notes`, `provenance`. The `provenance` object carries
+`firmware` and `verified`. Every value must be measured, not guessed: bed
+size from `device setup --save-profile` (live `$$` readback), firmware from
+the `$I` banner, and `has_endstops` from the device state machine. See
+`profiles/community/README.md` for the full quality bar.
+
+### Automation
+
+- `.github/ISSUE_TEMPLATE/machine-profile.md`: issue template that asks the
+  reporter to paste the profile JSON inside a ```json block.
+- `.github/workflows/profile-to-pr.yml`: on an issue labelled
+  `community-profile`, validates the JSON block and opens a pull request
+  adding `profiles/community/<name>.json`. Invalid JSON is reported back as
+  a comment on the issue explaining what to fix.
+
+The `profile submit` CLI validation and the workflow validation enforce the
+same schema, so a profile accepted by one is accepted by the other.

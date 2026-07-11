@@ -1,6 +1,7 @@
 # cli-anything-meerk40t
 
 Agent CLI harness for **MeerK40t** laser software. It is headless, outputs `--json` by default for agents, and wraps the real MeerK40t kernel.
+For laser safety, origin discipline, power and speed recipes, GRBL preflight, coordinates, and failure diagnosis, see the companion `laser-engraving` skill.
 
 ## Prerequisites
 
@@ -28,6 +29,7 @@ cli-anything-meerk40t [--json] [--device DRIVER] [--port PORT] [--baud N] [--mac
 | `operations` | list, add (cut/engrave/raster/image/dots), classify, declassify, set |
 | `device` | list, status, home, physical-home, move, info, connect, disconnect, detect, check, jog, goto, frame, setup |
 | `machine` | list profiles (bundled and user, with origin) |
+| `profile` | submit NAME - contribute a community machine profile (validates, then opens a PR via gh or prints an issue URL) |
 | `export` | svg, svgz (real backend); png (GUI-dependent); gcode (GRBL device required) |
 | `console` | Raw passthrough to the MeerK40t kernel console |
 | `session` | undo, redo, history, status |
@@ -64,6 +66,29 @@ cli-anything-meerk40t [--json] [--device DRIVER] [--port PORT] [--baud N] [--mac
 `--machine PROFILE` - load a profile that sets the driver, baud, and bed size in one step. A profile is needed for offline commands (export, elements, machine list, project ops); serial commands (connect, check, jog, goto, frame, setup) also need `--port`. An unknown profile emits a `--json` error listing the available names and exits 1.
 User profiles live in `~/.config/cli-anything-meerk40t/profiles/` (override with `CLI_ANYTHING_CONFIG_HOME`); a user profile wins over a bundled one with the same name.
 
+## Community machine profiles
+
+`profile submit NAME` contributes a machine profile to the shared
+collection. It loads the named profile, validates it against the community
+schema, then either opens a pull request (when the `gh` CLI is installed,
+authenticated, and `--yes` is given) or prints the profile JSON and a
+pre-filled GitHub new-issue URL.
+
+Nothing is submitted without `--yes`. Without it the command prints what
+would be sent and the exact command to confirm, leaving consent with the
+human. No secrets or tokens are handled client-side.
+
+```bash
+cli-anything-meerk40t profile submit sculpfun-s9        # plan only
+cli-anything-meerk40t profile submit sculpfun-s9 --yes  # open a PR
+```
+
+A `machine-profile` issue template plus the `profile-to-pr.yml` workflow
+let an operator contribute by opening an issue instead; the workflow
+validates the JSON block and opens the pull request automatically. The
+quality bar (values from live `$$` readback, firmware banner, and the
+device state machine) is documented in `profiles/community/README.md`.
+
 ## Agent guidance
 
 - Always pass `--json` so the agent can parse structured results.
@@ -71,21 +96,15 @@ User profiles live in `~/.config/cli-anything-meerk40t/profiles/` (override with
 - The dummy device is for project work only; it cannot burn.
 - Each one-shot command boots a fresh backend and shuts it down on exit, so keep a session open in the REPL to maintain a live connection.
 
-## Hardware workflow (follow in order)
+## Hardware workflow and laser safety
 
-Safety gates: the laser is live once connected. The operator must wear laser-safety glasses, confirm material focus, and keep a fire-safe area before burning. `device frame` and `device check` never fire the beam; only the console passthrough (`console spool`) does.
+The safety gates, origin discipline, power and speed recipes, GRBL preflight
+meaning, coordinate conventions, failure diagnosis, and when to re-frame are
+documented in the companion `laser-engraving` skill. Read it before you drive
+real hardware.
 
-1. Identify the machine: `cli-anything-meerk40t device detect [--probe]`. `device detect` globs ports only; `--probe` opens each candidate and reports firmware/version/state. Bed size, endstops, and firmware are not auto-detectable, so ask the operator for the model.
-2. Establish the work origin (safety, not a command): on machines without endstops, power OFF, park the head near front-left, then power on so (0,0) is the corner. Never call `device physical-home`.
-3. List profiles: `cli-anything-meerk40t machine list` (bundled and user, with origin).
-4. Choose the profile: `cli-anything-meerk40t --machine PROFILE --port /dev/cu.usbserial-10 ...` sets driver, baud, and bed in one step.
-5. Connect: start the persistent REPL, then `device connect` inside it. A one-shot `device connect` opens the link and shuts it down on exit, so use the REPL to keep the connection alive. Expect a controller reset click; read `$N` and `$$`.
-6. Validate motion: `cli-anything-meerk40t device jog DX DY [--feed]` (MACHINE mm, origin front-left, +Y away; the beam cannot fire during `$J=` moves).
-7. Move to a point: `cli-anything-meerk40t device goto X Y [--feed]`.
-8. Dry-frame the area: `cli-anything-meerk40t device frame X Y W H [--feed]` (laser off).
-9. Check the job: `cli-anything-meerk40t device check`. It connects and reads `$$`/`$N` automatically; it does not burn. `check()` does not disconnect, so run it in the REPL if the connection must persist. Set every op's power and speed first (the auto-created op is 100% power).
-10. Capture the profile (optional): `cli-anything-meerk40t device setup --save-profile NAME`.
-11. Burn: there is no dedicated burn subcommand. Run the job through the console passthrough (`cli-anything-meerk40t console 'plan default copy preprocess blob spool'`), which drives the live spooler. Start at low power and step up.
+The command reference for each `device` subcommand is in Device commands
+above. A runnable walkthrough is in Example 6 below.
 
 ## Examples
 
