@@ -35,7 +35,9 @@ BED_HEIGHT_MM = 400.0
 OP_CUT = {"kind": "cut", "color": "#ff0000", "passes": 3, "power": 950, "speed": 6.0}
 OP_SCORE = {"kind": "engrave", "color": "#0000ff", "passes": 1, "power": 280, "speed": 20.0}
 OP_ETCH = {"kind": "engrave", "color": "#000000", "passes": 1, "power": 380, "speed": 40.0}
-OPS = [OP_CUT, OP_SCORE, OP_ETCH]
+# Etch first, score second, cut LAST: through-cuts release parts from the
+# sheet, and released parts can shift under later passes.
+OPS = [OP_ETCH, OP_SCORE, OP_CUT]
 
 VALID_BURN_S = {950, 280, 380}
 

@@ -9,11 +9,11 @@
     <path d="M 328.5 70.5 L 351.5 70.5 L 351.5 99.5 L 328.5 99.5 Z" stroke="#000000" stroke-width="0.2" fill="none" id="winframe_side_b"/>
     <path d="M 151.5 42 A 8.5 8.5 0 1 1 168.5 42 A 8.5 8.5 0 1 1 151.5 42 Z" stroke="#000000" stroke-width="0.2" fill="none" id="gable_winframe_160"/>
     <path d="M 331.5 42 A 8.5 8.5 0 1 1 348.5 42 A 8.5 8.5 0 1 1 331.5 42 Z" stroke="#000000" stroke-width="0.2" fill="none" id="gable_winframe_340"/>
-    <path d="M 38 85 L 38 140" stroke="#000000" stroke-width="0.2" fill="none" id="door_plank_38.0"/>
-    <path d="M 44 85 L 44 140" stroke="#000000" stroke-width="0.2" fill="none" id="door_plank_44.0"/>
-    <path d="M 50 85 L 50 140" stroke="#000000" stroke-width="0.2" fill="none" id="door_plank_50.0"/>
-    <path d="M 56 85 L 56 140" stroke="#000000" stroke-width="0.2" fill="none" id="door_plank_56.0"/>
-    <path d="M 46.5 120 A 1.5 1.5 0 1 1 49.5 120 A 1.5 1.5 0 1 1 46.5 120 Z" stroke="#000000" stroke-width="0.2" fill="none" id="door_handle"/>
+    <path d="M 38 82 L 38 137" stroke="#000000" stroke-width="0.2" fill="none" id="door_plank_38.0"/>
+    <path d="M 44 82 L 44 137" stroke="#000000" stroke-width="0.2" fill="none" id="door_plank_44.0"/>
+    <path d="M 50 82 L 50 137" stroke="#000000" stroke-width="0.2" fill="none" id="door_plank_50.0"/>
+    <path d="M 56 82 L 56 137" stroke="#000000" stroke-width="0.2" fill="none" id="door_plank_56.0"/>
+    <path d="M 46.5 117 A 1.5 1.5 0 1 1 49.5 117 A 1.5 1.5 0 1 1 46.5 117 Z" stroke="#000000" stroke-width="0.2" fill="none" id="door_handle"/>
     <path d="M 23 63 L 117 63" stroke="#000000" stroke-width="0.2" fill="none" id="brick_h_20_63.0_23.0"/>
     <path d="M 23 63 L 23 70" stroke="#000000" stroke-width="0.2" fill="none" id="brick_v_20_63.0_23.0"/>
     <path d="M 39 63 L 39 70" stroke="#000000" stroke-width="0.2" fill="none" id="brick_v_20_63.0_39.0"/>
@@ -471,6 +471,7 @@
     <line x1="20" y1="140" x2="120" y2="140" stroke="#0000FF" stroke-width="0.2" fill="none" id="score_front_tab"/>
     <line x1="120" y1="140" x2="200" y2="140" stroke="#0000FF" stroke-width="0.2" fill="none" id="score_side_a_tab"/>
     <line x1="200" y1="140" x2="300" y2="140" stroke="#0000FF" stroke-width="0.2" fill="none" id="score_back_tab"/>
+    <line x1="32" y1="137" x2="64" y2="137" stroke="#0000FF" stroke-width="0.2" fill="none" id="score_door_hinge"/>
     <line x1="20" y1="222" x2="130" y2="222" stroke="#0000FF" stroke-width="0.2" fill="none" id="score_ridge"/>
     <line x1="164" y1="170" x2="164" y2="215.75" stroke="#0000FF" stroke-width="0.2" fill="none" id="score_chim_164"/>
     <line x1="178" y1="170" x2="178" y2="215.75" stroke="#0000FF" stroke-width="0.2" fill="none" id="score_chim_178"/>
@@ -479,9 +480,9 @@
   </g>
   <g id="cut" stroke="#FF0000" stroke-width="0.2" fill="none">
     <path d="M 20 60 L 120 60 L 160 15 L 200 60 L 300 60 L 340 15 L 380 60 L 384 60 L 392 64 L 392 136 L 384 140 L 380 140 L 300 140 L 296 150 L 204 150 L 200 140 L 196 150 L 124 150 L 120 140 L 116 150 L 24 150 L 20 140 L 20 60 Z" stroke="#FF0000" stroke-width="0.2" fill="none" id="wall_perim"/>
-    <path d="M 32 85 L 32 140" stroke="#FF0000" stroke-width="0.2" fill="none" id="door_left"/>
-    <path d="M 32 85 L 64 85" stroke="#FF0000" stroke-width="0.2" fill="none" id="door_top"/>
-    <path d="M 64 85 L 64 140" stroke="#FF0000" stroke-width="0.2" fill="none" id="door_right"/>
+    <path d="M 32 82 L 32 137" stroke="#FF0000" stroke-width="0.2" fill="none" id="door_left"/>
+    <path d="M 32 82 L 64 82" stroke="#FF0000" stroke-width="0.2" fill="none" id="door_top"/>
+    <path d="M 64 82 L 64 137" stroke="#FF0000" stroke-width="0.2" fill="none" id="door_right"/>
     <path d="M 72 72 L 92 72 L 92 98 L 72 98 Z" stroke="#FF0000" stroke-width="0.2" fill="none" id="front_left"/>
     <path d="M 96 72 L 116 72 L 116 98 L 96 98 Z" stroke="#FF0000" stroke-width="0.2" fill="none" id="front_right"/>
     <path d="M 150 72 L 170 72 L 170 98 L 150 98 Z" stroke="#FF0000" stroke-width="0.2" fill="none" id="side_a"/>

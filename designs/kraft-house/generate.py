@@ -57,8 +57,11 @@ DOOR_H = 55.0
 DOOR_CX = 48.0
 DOOR_X0 = DOOR_CX - DOOR_W / 2.0
 DOOR_X1 = DOOR_CX + DOOR_W / 2.0
-DOOR_Y0 = WALL_BOTTOM - DOOR_H
-DOOR_Y1 = WALL_BOTTOM
+# The door bottom sits 3 mm above the wall baseline: a threshold strip.
+# The hinge score must not share the bottom tab fold line, or folding the
+# tab inward would fold the door with it.
+DOOR_Y1 = WALL_BOTTOM - 3.0
+DOOR_Y0 = DOOR_Y1 - DOOR_H
 
 WIN_W = 20.0
 WIN_H = 26.0
@@ -310,8 +313,8 @@ score_elements.append(("score_front_tab", FRONT_X0, WALL_BOTTOM, FRONT_X1, WALL_
 score_elements.append(("score_side_a_tab", SIDE_A_X0, WALL_BOTTOM, SIDE_A_X1, WALL_BOTTOM))
 score_elements.append(("score_back_tab", BACK_X0, WALL_BOTTOM, BACK_X1, WALL_BOTTOM))
 
-# Door hinge: no separate score. The front tab fold score above already
-# runs along the door bottom; a second coincident score would cut through.
+# Door hinge: separate score along the door bottom (3 mm above the tab fold)
+score_elements.append(("score_door_hinge", DOOR_X0, DOOR_Y1, DOOR_X1, DOOR_Y1))
 
 # Ridge score
 score_elements.append(("score_ridge", ROOF_X0, ROOF_RIDGE_Y, ROOF_X1, ROOF_RIDGE_Y))
@@ -749,7 +752,8 @@ for g in groups:
 pieces = {
     "wall-strip": (WALL_LEFT, GABLE_PEAK_Y, GLUE_TAB_X1, WALL_BOTTOM + TAB_DEPTH),
     "roof": (ROOF_X0, ROOF_Y0, ROOF_X1, ROOF_Y1),
-    "chimney": (CHIM_X0, CHIM_TOP_Y, CHIM_X1, F1_tongue_bottom_y),
+    "chimney": (CHIM_X0, CHIM_TOP_Y, CHIM_X1,
+                max(p[1] for p in chimney_perim_points)),
 }
 
 piece_names = list(pieces)
