@@ -121,7 +121,7 @@ and failure diagnosis live in the
 
 ## Status
 
-v1.2.0. 92 unit tests and 13 E2E tests pass, 100% pass rate.
+v1.3.0. 104 unit tests and 13 E2E tests pass, 100% pass rate.
 
 Live-verified against a Sculpfun S9 (GRBL 1.1h, CH340) on macOS.
 
