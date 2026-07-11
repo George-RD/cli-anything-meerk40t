@@ -598,15 +598,12 @@ def device_info_cmd(ctx: click.Context):
 
 @device.command("connect")
 @click.pass_context
-@mutating
 def device_connect(ctx: click.Context):
     """Open the active device's serial connection (e.g. GRBL controller.open())."""
     _emit(ctx, device_mod.connect(ctx.obj["backend"]))
 
-
 @device.command("disconnect")
 @click.pass_context
-@mutating
 def device_disconnect(ctx: click.Context):
     """Close the active device's serial connection (controller.close())."""
     _emit(ctx, device_mod.disconnect(ctx.obj["backend"]))

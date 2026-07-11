@@ -130,6 +130,52 @@ class TestDevice(BackendTestCase):
         self.assertIn("error", result)
 
 
+    def test_disconnect_failed_close_preserves_connected_state(self):
+        # A failed controller.close() must not report a clean disconnect:
+        # the observed live connection state is preserved and the error is
+        # attached, so callers do not act on a false disconnected status.
+        class _Conn:
+            connected = True
+
+        class _Controller:
+            connection = _Conn()
+
+            def close(self):
+                raise RuntimeError("port busy")
+
+        class _Dev:
+            label = "Fake"
+
+            def __init__(self):
+                self.controller = _Controller()
+
+        class _Backend:
+            def device(self):
+                return _Dev()
+
+        result = device_mod.disconnect(_Backend())
+        self.assertTrue(result["connected"])
+        self.assertIn("error", result)
+
+    def test_active_info_reads_is_connected_for_lihuiyu(self):
+        # Lihuiyu controllers expose is_connected() rather than a boolean
+        # connected attribute; device status must report the real state.
+        class _Conn:
+            def is_connected(self):
+                return True
+
+        class _Controller:
+            connection = _Conn()
+
+        class _Dev:
+            label = "Fake"
+
+            def __init__(self):
+                self.controller = _Controller()
+
+        info = device_mod._active_info(_Dev())
+        self.assertTrue(info["connected"])
+
 class TestDeviceConfig(unittest.TestCase):
     def test_grbl_config_without_opening_serial(self):
         # Starting a grbl backend with a (non-existent) port must set the
@@ -145,6 +191,21 @@ class TestDeviceConfig(unittest.TestCase):
             self.assertFalse(dev.controller.connection.connected)
         finally:
             backend.shutdown()
+
+    def test_backend_serial_config_setter_failure_raises(self):
+        # A device whose serial_port setter rejects the value must surface a
+        # RuntimeError naming the failing field, not swallow it silently.
+        class _FailingSerialDev:
+            serial_port = property(
+                lambda self: None,
+                lambda self, value: (_ for _ in ()).throw(ValueError("rejected")),
+            )
+            baud_rate = 115200
+
+        backend = Meerk40tBackend(port="/dev/fake", baud=115200)
+        with self.assertRaises(RuntimeError) as ctx:
+            backend._apply_serial_config(_FailingSerialDev())
+        self.assertIn("serial_port", str(ctx.exception))
 
 class TestDeviceProviderAlias(unittest.TestCase):
     """Finding 1: the CLI ``lihuiyu`` choice must resolve to the registered
@@ -481,6 +542,7 @@ class TestCliDevice(unittest.TestCase):
 
     def _run_json(self, args):
         import io
+        import sys
         from click.testing import CliRunner
         from cli_anything.meerk40t import meerk40t_cli
 
@@ -492,6 +554,7 @@ class TestCliDevice(unittest.TestCase):
             result = runner.invoke(meerk40t_cli.cli, ["--json"] + args)
         finally:
             meerk40t_cli._REAL_STDOUT = orig
+            sys.stdout = orig
         return result, capture.getvalue()
 
     def test_cli_grbl_status_wiring(self):

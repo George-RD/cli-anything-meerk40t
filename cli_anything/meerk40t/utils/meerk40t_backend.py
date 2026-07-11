@@ -143,16 +143,18 @@ class Meerk40tBackend:
                 provider = _device_provider_name(self.device_type)
                 kernel.console(f"service device start -i {provider} 0\n")
                 dev = kernel.device
-                if self.port is not None and hasattr(dev, "serial_port"):
+                try:
+                    self._apply_serial_config(dev)
+                except Exception as exc:
+                    # Roll back the partially booted kernel so the backend
+                    # remains restartable after a bad port/baud value.
                     try:
-                        dev.serial_port = self.port
-                    except Exception:
-                        pass
-                if self.baud is not None and hasattr(dev, "baud_rate"):
-                    try:
-                        dev.baud_rate = self.baud
-                    except Exception:
-                        pass
+                        kernel()
+                    except Exception as teardown_exc:
+                        raise RuntimeError(
+                            f"serial config failed and kernel teardown also failed: {teardown_exc}"
+                        ) from exc
+                    raise
             else:
                 kernel.console("service device start dummy 0\n")
             # Register the base-device console commands (device, devinfo, activate,
@@ -167,6 +169,29 @@ class Meerk40tBackend:
             self._watcher_installed = True
 
             self._kernel = kernel
+
+
+    def _apply_serial_config(self, dev) -> None:
+        """Apply configured serial port/baud to the active device.
+
+        A setter failure (e.g. an invalid port value) is surfaced as a
+        RuntimeError rather than silently swallowed, so the operator learns
+        the device did not accept the configuration.
+        """
+        if self.port is not None and hasattr(dev, "serial_port"):
+            try:
+                dev.serial_port = self.port
+            except Exception as exc:
+                raise RuntimeError(
+                    f"failed to set serial_port={self.port!r}: {exc}"
+                ) from exc
+        if self.baud is not None and hasattr(dev, "baud_rate"):
+            try:
+                dev.baud_rate = self.baud
+            except Exception as exc:
+                raise RuntimeError(
+                    f"failed to set baud_rate={self.baud!r}: {exc}"
+                ) from exc
 
     def shutdown(self) -> None:
         """Tear down the kernel."""

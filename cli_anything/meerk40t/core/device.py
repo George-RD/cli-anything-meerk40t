@@ -38,8 +38,27 @@ def _active_info(dev):
         info["baud"] = getattr(dev, "baud_rate", None)
     controller = getattr(dev, "controller", None)
     conn = getattr(controller, "connection", None) if controller is not None else None
-    info["connected"] = bool(getattr(conn, "connected", False))
+    info["connected"] = _connection_state(conn)
     return info
+
+def _connection_state(conn):
+    """Resolve a device connection's live state across MeerK40t drivers.
+
+    GRBL and the dummy device expose a boolean ``connected`` attribute, while
+    Lihuiyu controllers expose ``is_connected()``. Read whichever is present so
+    ``device status``/``device connect`` report the real state instead of a
+    false disconnected status for the advertised Lihuiyu hardware path.
+    """
+    if conn is None:
+        return False
+    connected = getattr(conn, "connected", None)
+    if isinstance(connected, bool):
+        return connected
+    if callable(getattr(conn, "is_connected", None)):
+        return bool(conn.is_connected())
+    if isinstance(connected, int):
+        return bool(connected)
+    return bool(connected)
 
 
 def _parse_position(lines):
@@ -201,7 +220,6 @@ def disconnect(backend):
         controller.close()
     except Exception as exc:  # pragma: no cover - surfaced to caller
         info = _connect_result(dev)
-        info["connected"] = False
         info["error"] = str(exc)
         return info
     return _connect_result(dev)
