@@ -303,8 +303,6 @@ class BridgePluginTest(unittest.TestCase):
             mk.apply_backfill_patches = real_apply
 
 
-if __name__ == "__main__":
-    unittest.main()
 
 
 class WebServerRuntimePatchTest(unittest.TestCase):
@@ -395,3 +393,6 @@ class BridgeStatusCommandTest(unittest.TestCase):
         self.assertIn("cli-anything meerk40t bridge", text)
         for name in (mk.PATCH_HANDOVER, mk.PATCH_TYPED, mk.PATCH_FEEDBACK):
             self.assertIn(name, text)
+
+if __name__ == "__main__":
+    unittest.main()
