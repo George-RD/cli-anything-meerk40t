@@ -114,10 +114,11 @@ All tests use the helper `_resolve_cli("cli-anything-meerk40t")`, which returns 
 
 ## 3b. Bridge Plugin Suite (`test_mk_plugin.py`)
 
-14 tests covering the MeerK40t back-fill bridge plugin: behavioural upstream
+15 tests covering the MeerK40t back-fill bridge plugin: behavioural upstream
 detection, console `set` replacement (typed values, feedback, `-p` path flag),
 console/web server handover transforms, patch idempotence and failure
-isolation, and the runtime web-server patch against a real temp module.
+isolation, the `bridge_status` console command, and the runtime web-server
+patch against a real temp module.
 Together with `test_core.py` (94) this makes 109 unit tests; `test_full_e2e.py`
 adds 13 E2E tests (122 total).
 
@@ -201,7 +202,7 @@ All 13 E2E tests passed:
 | Suite | Tests | Passed | Failed | Time |
 |---|---|---|---|---|
 | test_core | 94 | 94 | 0 | 2.41s |
-| test_mk_plugin | 14 | 14 | 0 | 0.10s |
+| test_mk_plugin | 15 | 15 | 0 | 0.10s |
 | test_full_e2e | 13 | 13 | 0 | 7.52s |
 | **Total** | **122** | **122** | **0** | **10.03s** |
 
