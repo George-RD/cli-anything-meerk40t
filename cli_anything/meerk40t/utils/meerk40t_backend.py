@@ -25,6 +25,30 @@ def _strip_ansi(text: str) -> str:
 def _strip_ts(text: str) -> str:
     """Strip the leading timestamp prefix the console channel adds."""
     return _TS_RE.sub("", text)
+# Map the user-facing CLI device choice to the provider name MeerK40t
+# actually registers for `service device start -i <provider>`. Verified against
+# the installed meerk40t package (meerk40t/<driver>/plugin.py):
+#   lihuiyu  -> lhystudios   (provider/device/lhystudios -> LihuiyuDevice)
+#   moshi    -> moshi        (provider/device/moshi -> MoshiDevice)
+#   ruida    -> ruida         (provider/device/ruida -> RuidaDevice)
+#   newly    -> newly         (provider/device/newly -> NewlyDevice)
+#   balor    -> balor         (provider/device/balor -> BalorDevice)
+#   grbl     -> grbl          (provider/device/grbl -> GRBLDevice)
+#   dummy    -> dummy        (handled separately via `service device start dummy 0`)
+# Only `lihuiyu` differs from its registered provider name.
+_DEVICE_PROVIDER_ALIASES = {
+    "lihuiyu": "lhystudios",
+}
+
+
+def _device_provider_name(device_type: str) -> str:
+    """Resolve a user-facing CLI device choice to its MeerK40t provider name.
+
+    `service device start -i <provider>` needs the provider name MeerK40t
+    registered, not the friendly CLI choice. Unknown values pass through
+    unchanged so future providers work without code changes here.
+    """
+    return _DEVICE_PROVIDER_ALIASES.get(device_type, device_type)
 
 
 class Meerk40tBackend:
@@ -116,7 +140,8 @@ class Meerk40tBackend:
             kernel.console("channel print console\n")
 
             if self.device_type and self.device_type != "dummy":
-                kernel.console(f"service device start -i {self.device_type} 0\n")
+                provider = _device_provider_name(self.device_type)
+                kernel.console(f"service device start -i {provider} 0\n")
                 dev = kernel.device
                 if self.port is not None and hasattr(dev, "serial_port"):
                     try:

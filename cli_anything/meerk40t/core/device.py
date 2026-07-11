@@ -171,7 +171,17 @@ def connect(backend):
         info["connected"] = False
         info["error"] = str(exc)
         return info
-    return _connect_result(dev)
+    # controller.open() may swallow the underlying serial failure: pyserial
+    # raises inside the connection delegate and it is logged rather than
+    # propagated, so open() can return with the connection still closed.
+    # Surface that as an error instead of returning a clean status shape.
+    # A genuinely open connection keeps the success shape unchanged.
+    info = _connect_result(dev)
+    if not info.get("connected"):
+        port = info.get("port")
+        suffix = f" (port={port})" if port else ""
+        info["error"] = f"connection failed to open{suffix}"
+    return info
 
 
 def disconnect(backend):

@@ -10,7 +10,7 @@ All tests use the Python standard library `unittest` module (no pytest). The bac
 
 | File | Count | Scope |
 |------|-------|-------|
-| `tests/test_core.py` | ~44 unit tests | Backend wrapper, project, elements, operations, session, export, device, and CLI wiring modules in isolation. |
+| `tests/test_core.py` | 47 unit tests | Backend wrapper, project, elements, operations, session, export, device, and CLI wiring modules in isolation. |
 | `tests/test_full_e2e.py` | ~12 E2E tests | CLI subprocess workflows, backend round-trips, and realistic laser-job scenarios. |
 
 Both test modules create fresh backends in `setUp` and tear them down in `tearDown`. E2E tests that exercise the installed CLI also fall back to `python -m cli_anything.meerk40t.meerk40t_cli` if the console script is not on `PATH`.
@@ -67,6 +67,12 @@ Both test modules create fresh backends in `setUp` and tear them down in `tearDo
 
 ### `TestDeviceConfig` — driver selection without hardware
 - `test_grbl_config_without_opening_serial` — `Meerk40tBackend(device="grbl", port="/dev/fake", baud=115200)` activates a `GRBLDevice` with `serial_port="/dev/fake"` and `controller.connection.connected == False`; no serial port is opened.
+### `TestDeviceProviderAlias` — device provider alias (P2 CR finding 1)
+- `test_lihuiyu_alias_resolves_to_lhystudios` — `_device_provider_name("lihuiyu") == "lhystudios"` and every other advertised choice (`moshi`, `ruida`, `newly`, `balor`, `grbl`) maps 1:1 to its registered provider name (verified against the installed meerk40t package).
+- `test_backend_lihuiyu_starts_lhystudios_device` — `Meerk40tBackend(device="lihuiyu")` boots a `LihuiyuDevice`, proving `service device start -i lhystudios 0` was issued; booting does not open any serial/USB port, so it is safe without hardware.
+
+### `TestDeviceConnectError` — connect error shape (P2 CR finding 2)
+- `test_connect_grbl_fake_port_returns_error` — `device.connect()` on a GRBL device with `port="/dev/fake"` returns `connected: false` **and** an `error` key (`connection failed to open (port=/dev/fake)`); the serial failure is swallowed inside `controller.open()`, so the post-open connected check is what surfaces it.
 
 ### `TestCliDevice` — CLI wiring
 - `test_cli_grbl_status_wiring` — `cli-anything-meerk40t --json --device grbl --port /dev/fake device status` returns GRBL device JSON with `connected: false` and opens no serial port.
@@ -124,21 +130,20 @@ All tests use the helper `_resolve_cli("cli-anything-meerk40t")`, which returns 
 
 
 ## 5. Test Results
-
 ### Unit Tests (test_core.py)
 
 ```
 $ .venv/bin/python -m unittest discover -s cli_anything/meerk40t/tests -p "test_core.py" -v
 
-Ran 44 tests in 1.49s
+Ran 47 tests in 1.61s
 
 OK
 ```
 
-All 34 unit tests passed:
+All 47 unit tests passed:
 - TestBackend: 7 tests (start/shutdown, run/capture, save_svg, load_file, elems, ops, help_text)
 - TestProject: 4 tests (create, open_nonexistent, save, info)
-- TestElements: 7 tests (circle, rect_stroke_fill, ellipse, line, text, list, delete, clear)
+- TestElements: 8 tests (circle, rect_stroke_fill, ellipse, line, text, list, delete, clear)
 - TestOperations: 5 tests (list, add, classify, delete, clear)
 - TestSession: 2 tests (save_load, undo_redo)
 - TestExport: 3 tests (svg, svgz, png_raises_without_renderer)
@@ -147,6 +152,8 @@ All 34 unit tests passed:
 - TestDevice: 5 tests (default_device_is_dummy, list_devices_returns_active, device_status_has_connection_state, connect_dummy_returns_error_shape, disconnect_dummy_returns_error_shape)
 - TestDeviceConfig: 1 test (grbl_config_without_opening_serial)
 - TestCliDevice: 3 tests (cli_grbl_status_wiring, cli_dummy_connect_error_wiring, cli_help_lists_device_options)
+- TestDeviceProviderAlias: 2 tests (lihuiyu_alias_resolves_to_lhystudios, backend_lihuiyu_starts_lhystudios_device)
+- TestDeviceConnectError: 1 test (connect_grbl_fake_port_returns_error)
 
 ### E2E Tests (test_full_e2e.py)
 
@@ -166,9 +173,9 @@ All 14 E2E tests passed:
 
 | Suite | Tests | Passed | Failed | Time |
 |---|---|---|---|---|
-| test_core | 44 | 44 | 0 | 1.49s |
+| test_core | 47 | 47 | 0 | 1.61s |
 | test_full_e2e | 14 | 14 | 0 | 7.00s |
-| **Total** | **58** | **58** | **0** | **8.49s** |
+| **Total** | **61** | **61** | **0** | **8.61s** |
 
 Pass rate: 100%
 

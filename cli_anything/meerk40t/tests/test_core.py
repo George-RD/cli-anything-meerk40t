@@ -146,6 +146,50 @@ class TestDeviceConfig(unittest.TestCase):
         finally:
             backend.shutdown()
 
+class TestDeviceProviderAlias(unittest.TestCase):
+    """Finding 1: the CLI ``lihuiyu`` choice must resolve to the registered
+    provider name ``lhystudios`` when the backend starts a device."""
+
+    def test_lihuiyu_alias_resolves_to_lhystudios(self):
+        from cli_anything.meerk40t.utils.meerk40t_backend import (
+            _device_provider_name,
+        )
+        self.assertEqual(_device_provider_name("lihuiyu"), "lhystudios")
+        # Every other advertised choice maps 1:1 to its registered provider
+        # name (verified against the installed meerk40t package).
+        for choice in ("moshi", "ruida", "newly", "balor", "grbl"):
+            self.assertEqual(_device_provider_name(choice), choice)
+
+    def test_backend_lihuiyu_starts_lhystudios_device(self):
+        # Activating the lhystudios provider headless boots the device service
+        # but does NOT open any serial/USB port (the connection is opened
+        # lazily via controller.open()), so this is safe without hardware.
+        backend = Meerk40tBackend(device="lihuiyu")
+        try:
+            backend.start()
+            dev = backend.kernel.device
+            self.assertEqual(type(dev).__name__, "LihuiyuDevice")
+        finally:
+            backend.shutdown()
+
+
+class TestDeviceConnectError(unittest.TestCase):
+    """Finding 2: a failed open (no hardware) must surface an ``error`` key
+    rather than returning a clean status shape."""
+
+    def test_connect_grbl_fake_port_returns_error(self):
+        # grbl + a non-existent /dev/fake port: controller.open() swallows the
+        # pyserial failure internally and returns with the connection closed.
+        backend = Meerk40tBackend(device="grbl", port="/dev/fake", baud=115200)
+        try:
+            backend.start()
+            result = device_mod.connect(backend)
+            self.assertFalse(result["connected"])
+            self.assertIn("error", result)
+            self.assertIn("port=/dev/fake", result["error"])
+        finally:
+            backend.shutdown()
+
 
 class TestProject(BackendTestCase):
     def test_create_project(self):
