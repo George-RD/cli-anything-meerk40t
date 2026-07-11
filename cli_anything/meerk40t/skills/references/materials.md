@@ -15,13 +15,15 @@ lens, focus, and material batch. Calibrate on scrap first.*
 
 ## Calibration procedure: the power ladder
 
-One burn tells you where a new material responds. On scrap of the actual
-material:
+One burn tells you where a new material responds. Full safety gate first
+(see [hardware.md](hardware.md)): operator present for the entire burn, rated
+eyewear, ventilation running, extinguisher or fire blanket within reach.
+Then, on scrap of the actual material:
 
 1. Place 3-5 small squares (20mm) in a row, one power step apart at a fixed
-   feed. For an unknown organic material on a ~5W diode, a first ladder of
-   10/15/20% at 1500 mm/min keeps every square low-energy; it is a starting
-   point, not a safety guarantee - the operator watches the whole burn.
+   feed. On a ~5W diode, 10/15/20% at 1500 mm/min is a conservative starting
+   ladder for that machine class - not a fire-safety guarantee for your
+   material or batch.
 2. Read the result: faintest visible square = marking threshold; pick the
    step that gives the contrast you want. Nothing visible = raise power or
    halve feed and repeat. Charring or flame-licking = stop and back off.
