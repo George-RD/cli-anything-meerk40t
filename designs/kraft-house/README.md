@@ -26,7 +26,7 @@ Window frames are etched 1.5 mm outside each opening. The door sits left of cent
 
 | Layer | Colour | Job type | What it does |
 | --- | --- | --- | --- |
-| `cut` | `#FF0000` red | Cut through | Outer edges, window holes, door three sides, chimney slot |
+| `cut` | `#FF0000` red | Cut through | Outer edges, window holes, door three sides, chimney slots |
 | `score` | `#0000FF` blue | Score / fold | Fold lines, drawn as solid lines |
 | `etch` | `#000000` black | Engrave | Bricks, shingles, timber frame, door planks, window frames |
 
@@ -80,7 +80,7 @@ Line up the machine origin with the start of the working window, not the sheet c
 
 6. Fold the chimney into a small box. Glue the 6 mm tab. The two angled faces match the roof pitch. The two V-notched faces fit against the roof.
 
-7. Push the two locking tongues on the chimney base through the 16 mm × 3 mm slot in the roof. Fold the tongues slightly underneath to hold the chimney in place. Add a small dot of glue if needed.
+7. Push the two locking tongues on the chimney base through the two 3 mm × 8 mm slots in the roof. The slots run up the slope, one under each angled face. Fold the tongues slightly underneath to hold the chimney in place. Add a small dot of glue if needed.
 
 8. Open the door on its bottom hinge. It is cut on three sides and scored at the bottom, so it swings open.
 

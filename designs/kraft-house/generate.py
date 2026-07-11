@@ -93,10 +93,20 @@ ROOF_X1 = 130.0
 ROOF_Y0 = 160.0
 ROOF_Y1 = 284.0
 ROOF_RIDGE_Y = 222.0
-ROOF_SLOT_X0 = 67.0
-ROOF_SLOT_X1 = 83.0
-ROOF_SLOT_Y0 = 202.0
-ROOF_SLOT_Y1 = 205.0
+# Chimney slots: TWO slots oriented along the slope (flat y direction), one
+# under each angled (perpendicular-to-ridge) chimney face. In 3D the tongues
+# sit on those two faces, so a single ridge-parallel slot cannot take both.
+# Chimney footprint on the flat panel: 14 mm along the ridge (x 68..82),
+# 14/cos(pitch) = 21.07 mm along the slope, seat centre 18.5 mm from ridge.
+ROOF_SLOT_YC = 203.5          # slope-centre of the chimney seat (flat y)
+ROOF_SLOT_LEN = 8.0           # along slope; tongue projects ~6 mm
+ROOF_SLOT_W = 3.0             # across; card is 0.35 mm thick
+ROOF_SLOTS = [
+    (66.5, ROOF_SLOT_YC - ROOF_SLOT_LEN / 2.0,
+     69.5, ROOF_SLOT_YC + ROOF_SLOT_LEN / 2.0),
+    (80.5, ROOF_SLOT_YC - ROOF_SLOT_LEN / 2.0,
+     83.5, ROOF_SLOT_YC + ROOF_SLOT_LEN / 2.0),
+]
 
 # --- chimney ---------------------------------------------------------------
 CHIM_X0 = 150.0
@@ -221,8 +231,9 @@ cut_elements.append(("gable_b_window", f"M {fmt(GABLE_WIN_CX_B - GABLE_WIN_R)} {
 # Roof outer perimeter
 cut_elements.append(("roof_perim", f"M {fmt(ROOF_X0)} {fmt(ROOF_Y0)} L {fmt(ROOF_X1)} {fmt(ROOF_Y0)} L {fmt(ROOF_X1)} {fmt(ROOF_Y1)} L {fmt(ROOF_X0)} {fmt(ROOF_Y1)} Z"))
 
-# Chimney slot
-cut_elements.append(("chimney_slot", f"M {fmt(ROOF_SLOT_X0)} {fmt(ROOF_SLOT_Y0)} L {fmt(ROOF_SLOT_X1)} {fmt(ROOF_SLOT_Y0)} L {fmt(ROOF_SLOT_X1)} {fmt(ROOF_SLOT_Y1)} L {fmt(ROOF_SLOT_X0)} {fmt(ROOF_SLOT_Y1)} Z"))
+# Chimney slots (two, slope-direction)
+for i, (sx0, sy0, sx1, sy1) in enumerate(ROOF_SLOTS):
+    cut_elements.append((f"chimney_slot_{i}", f"M {fmt(sx0)} {fmt(sy0)} L {fmt(sx1)} {fmt(sy0)} L {fmt(sx1)} {fmt(sy1)} L {fmt(sx0)} {fmt(sy1)} Z"))
 
 # --- chimney net perimeter -------------------------------------------------
 # F1 / F3 are the ridge-parallel faces (angled parallelogram bottoms);
@@ -281,10 +292,11 @@ chimney_perim_points = [
 ]
 cut_elements.append(("chimney_perim", points_to_path(chimney_perim_points)))
 
-# Note on deviation: the flat-net tongue tips sit at y = 210.875, below the
-# roof slot rectangle (y = 202..205). In the folded 3D assembly the chimney
-# bottom follows the roof pitch, so the flat-net tongue position is not the
-# folded position; the slot and tongues are still physically coherent.
+# Note on the chimney lock: the two tongues sit at the middle of the angled
+# faces. Folded, each angled face runs up the slope, so its mid-face tongue
+# lands at the seat's slope-centre (flat y = ROOF_SLOT_YC), one tongue per
+# slot. Tongue is 4 mm wide in the net, ~6 mm projected along the slope,
+# inside the 8 mm slot length.
 
 # --- score lines -----------------------------------------------------------
 # Vertical wall fold scores
@@ -431,19 +443,27 @@ for x0, x1, peak in ((SIDE_A_X0, SIDE_A_X1, GABLE_A_PEAK),
 y = ROOF_Y0 + ETCH_MARGIN
 row = 0
 while y < ROOF_Y1 - ETCH_MARGIN:
-    if not (ROOF_SLOT_Y0 - ETCH_MARGIN <= y <= ROOF_SLOT_Y1 + ETCH_MARGIN):
+    slot_band = (ROOF_SLOTS[0][1] - ETCH_MARGIN <= y <= ROOF_SLOTS[0][3] + ETCH_MARGIN)
+    if not slot_band:
         etch_elements.append((f"shingle_h_{y:.1f}", f"M {fmt(ROOF_X0 + ETCH_MARGIN)} {fmt(y)} L {fmt(ROOF_X1 - ETCH_MARGIN)} {fmt(y)}"))
     else:
-        # Split around slot
-        etch_elements.append((f"shingle_h_left_{y:.1f}", f"M {fmt(ROOF_X0 + ETCH_MARGIN)} {fmt(y)} L {fmt(ROOF_SLOT_X0 - ETCH_MARGIN)} {fmt(y)}"))
-        etch_elements.append((f"shingle_h_right_{y:.1f}", f"M {fmt(ROOF_SLOT_X1 + ETCH_MARGIN)} {fmt(y)} L {fmt(ROOF_X1 - ETCH_MARGIN)} {fmt(y)}"))
+        # Split the course around both slots
+        xs = [ROOF_X0 + ETCH_MARGIN]
+        for sx0, _sy0, sx1, _sy1 in ROOF_SLOTS:
+            xs += [sx0 - ETCH_MARGIN, sx1 + ETCH_MARGIN]
+        xs.append(ROOF_X1 - ETCH_MARGIN)
+        for k in range(0, len(xs), 2):
+            if xs[k + 1] - xs[k] > 2.0:
+                etch_elements.append((f"shingle_h_{y:.1f}_{k}", f"M {fmt(xs[k])} {fmt(y)} L {fmt(xs[k + 1])} {fmt(y)}"))
     # Vertical joints in this course
     offset = 0.0 if row % 2 == 0 else 4.0
     x = ROOF_X0 + ETCH_MARGIN + offset
     while x < ROOF_X1 - ETCH_MARGIN:
         yb = y + 8.0
-        in_slot = (ROOF_SLOT_X0 - ETCH_MARGIN <= x <= ROOF_SLOT_X1 + ETCH_MARGIN and
-                   not (yb <= ROOF_SLOT_Y0 - ETCH_MARGIN or y >= ROOF_SLOT_Y1 + ETCH_MARGIN))
+        in_slot = any(
+            sx0 - ETCH_MARGIN <= x <= sx1 + ETCH_MARGIN and
+            not (yb <= sy0 - ETCH_MARGIN or y >= sy1 + ETCH_MARGIN)
+            for sx0, sy0, sx1, sy1 in ROOF_SLOTS)
         if yb <= ROOF_Y1 - ETCH_MARGIN and not in_slot:
             etch_elements.append((f"shingle_v_{y:.1f}_{x:.1f}", f"M {fmt(x)} {fmt(y)} L {fmt(x)} {fmt(yb)}"))
         x += 8.0
@@ -458,7 +478,9 @@ for x in (ROOF_X0 + 5.0, ROOF_X1 - 5.0):
 # Chimney brick etch (safe central region, clear of tongues and V-notches)
 for y in (177.0, 184.0, 191.0, 198.0):
     etch_elements.append((f"chim_brick_h_{y:.1f}", f"M {fmt(CHIM_X0 + 3.0)} {fmt(y)} L {fmt(CHIM_X0 + 4 * CHIM_FACE_W - 3.0)} {fmt(y)}"))
-for row, y in enumerate((177.0, 184.0, 191.0, 198.0)):
+# No vertical joints below the 191 mm course: a 198+7 mm tick would poke
+# past the shortest face bottoms (y = 200 on F4 and at F1's left edge).
+for row, y in enumerate((177.0, 184.0, 191.0)):
     offset = 0.0 if row % 2 == 0 else 8.0
     x = CHIM_X0 + 3.0 + offset
     while x < CHIM_X0 + 4 * CHIM_FACE_W - 3.0:
@@ -621,7 +643,8 @@ apertures = []
 for name, x, y, w, h in windows:
     apertures.append(("rect", x, y, x + w, y + h))
 apertures.append(("rect", DOOR_X0, DOOR_Y0, DOOR_X1, DOOR_Y1))
-apertures.append(("rect", ROOF_SLOT_X0, ROOF_SLOT_Y0, ROOF_SLOT_X1, ROOF_SLOT_Y1))
+for sx0, sy0, sx1, sy1 in ROOF_SLOTS:
+    apertures.append(("rect", sx0, sy0, sx1, sy1))
 apertures.append(("circle", GABLE_WIN_CX_A, GABLE_WIN_CY, GABLE_WIN_R))
 apertures.append(("circle", GABLE_WIN_CX_B, GABLE_WIN_CY, GABLE_WIN_R))
 
