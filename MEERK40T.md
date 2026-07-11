@@ -84,33 +84,55 @@ port. Because each one-shot command boots a fresh backend and shuts it down on
 exit, run `connect`/`status`/`disconnect` inside the REPL to keep the link
 alive across commands.
 
-## Field-verified traps (Sculpfun S9 bring-up, 2026-07-11)
+## Hardware workflow (GRBL serial machines)
 
-These were found driving a real GRBL 1.1h machine and will bite any agent:
+Follow in order. Do not skip steps.
 
-1. **Default operation power is 100%.** The kernel auto-creates an engrave op
-   with `power=1000`, `speed=20`. Always set power and speed explicitly
-   (`operations set 0 power 150` = 15% when GRBL `$30=1000`) before export.
-2. **Y placement depends on bed size.** G-code Y is flipped through the device
-   bed height. A fresh kernel defaults to a 235mm bed; on a 410x400mm machine
-   the burn lands ~165mm off. Set `bedwidth`/`bedheight` to the machine's
-   `$130`/`$131` values AND call `dev.realize()` (a console `set bedheight`
-   alone does not refresh the coordinate view). Always check the exported
-   G-code Y range against the framed area before sending.
-3. **`plan ... save_job` hangs with a live connection.** The plan pipeline
-   blocks indefinitely in a kernel whose device holds an open serial link.
-   The file is written correctly first and nothing is sent, but export
-   G-code from a disconnected kernel.
-4. **No-endstop machines (most diode engravers):** never call
-   `physical-home`. Work origin is wherever the head sits at power-on. Park
-   the head near the front-left corner with the machine POWERED OFF (idle
-   steppers may still be energised; never back-drive a locked gantry), then
-   power on. Trust `$130`/`$131` for travel limits over the vendor spec sheet.
-5. **First-connect safety:** a GRBL reset executes stored `$N` startup
-   blocks. After connecting, read `$N` and `$$` and verify `$32=1` (laser
-   mode, beam off during G0/jog) before authorising any motion. Validate
-   motion with `$J=` jogs (cannot fire the laser): 10mm jog, centre and
-   back, then a dry frame of the burn area.
-6. **Brand/model is not detectable** from USB or the GRBL banner (generic
-   CH340 + `Grbl 1.1h`). Ask the operator; the model determines bed size and
-   endstops.
+### 1. Identify the machine
+
+1. Find the port: `ls /dev/cu.usbserial* /dev/cu.usbmodem*`.
+2. Ask the operator for brand and model (not detectable from USB or the
+   GRBL banner). The model determines bed size and endstops.
+
+### 2. Establish the work origin (machines without endstops)
+
+1. Never call `device physical-home`.
+2. Have the operator power the machine OFF (never hand-move the head while
+   powered; idle steppers may still be energised).
+3. Park the head near the front-left corner, not pressed into the frame.
+4. Power on. The head's position is now (0,0).
+
+### 3. Connect and preflight
+
+1. Confirm with the operator: laser glasses available, bed clear of
+   flammables, gantry unobstructed.
+2. `device connect` (in the REPL; expect a controller reset click).
+3. Read `$N`: confirm startup blocks are empty.
+4. Read `$$`: confirm `$32=1` (laser mode: beam off during positioning).
+5. Record `$130`/`$131` (true bed travel) and `$30` (max S value).
+
+### 4. Validate motion (beam physically cannot fire during `$J=` jogs)
+
+1. Jog 10mm: `$J=G91 X10 Y10 F600`. Operator confirms distance and
+   direction (+X right, +Y away from operator).
+2. Jog to bed centre and back to 0,0. Operator confirms clean return.
+3. Dry-frame the intended burn area with absolute jogs.
+
+### 5. Prepare the job
+
+1. Set bed size from `$130`/`$131`: `console 'set bedwidth 410mm'`,
+   `console 'set bedheight 400mm'`, then refresh the view (`dev.realize()`
+   via the backend; console `set` alone does not refresh).
+2. Set power and speed on every operation before export:
+   `operations set 0 power 150` (S value; 150/$30=15%),
+   `operations set 0 speed 25` (mm/s). Never export with defaults: the
+   auto-created op is 100% power.
+3. Export G-code with the device DISCONNECTED (the plan pipeline blocks on
+   a live serial link).
+4. Verify the exported X/Y ranges match the dry-framed area before sending.
+
+### 6. Burn
+
+1. Operator wears laser glasses; material placed and focused.
+2. Re-frame at the burn location for final placement confirmation.
+3. Start conservative (15% power) and increase, never the reverse.

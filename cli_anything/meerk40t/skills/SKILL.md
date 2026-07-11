@@ -124,13 +124,14 @@ Manage the mutable session state.
 - For real hardware, activate the driver with `--device grbl --port /dev/cu.usbserial-10` (or `lihuiyu`, etc.), then open the link with `device connect` and close it with `device disconnect`. Run these inside the REPL so the connection persists: each one-shot command boots a fresh backend and shuts it down on exit. `device status` reports `connected`, `port`, and `baud` without touching the port.
 - Typical workflow: `project new` → add `elements` → `operations classify` → `export svg`.
 
-## Safety and placement traps (field-verified on real hardware)
+## Hardware workflow (follow in order)
 
-- **Default operation power is 100%** (`power=1000`). Set power and speed explicitly before any export or burn: `operations set 0 power 150` is 15% when GRBL `$30=1000`.
-- **Bed size drives Y placement.** G-code Y is flipped through the device bed height; a fresh kernel defaults to 235mm. Set the machine's real bed size (GRBL `$130`/`$131`) via `console 'set bedwidth 410mm'` / `'set bedheight 400mm'` and refresh the view, then verify the exported G-code Y range matches the intended location before sending. A wrong bed size misplaces the burn silently.
-- **Export G-code from a disconnected kernel.** The plan pipeline (`plan copy preprocess validate blob save_job`) blocks indefinitely when the device holds an open serial connection.
-- **Never `device physical-home` on machines without limit switches** (most diode engravers). The work origin is wherever the head sits at power-on; park it near the front-left corner with the machine powered off, then power on.
-- **Verify before motion:** after connecting, check GRBL `$32=1` (laser mode keeps the beam off during positioning) and that `$N` startup blocks are empty. Validate motion with `$J=` jogs (cannot fire the laser) before running any job.
+1. Identify: find the port (`ls /dev/cu.usbserial*`); ask the operator for the machine model (bed size and endstops are not detectable).
+2. Origin (no-endstop machines): never `device physical-home`. Operator powers the machine off, parks the head near the front-left corner, powers on. That position is (0,0).
+3. Connect (in the REPL) and preflight: read `$N` (must be empty) and `$$`; confirm `$32=1`; record `$130`/`$131` (true bed travel) and `$30` (max S value).
+4. Validate motion with `$J=` jogs (cannot fire the laser): 10mm jog with operator confirming direction, centre-and-back round trip, then dry-frame the burn area.
+5. Prepare the job: set bed size from `$130`/`$131` and refresh the device view; set power and speed on every operation (`operations set 0 power 150` = 15% at `$30=1000`). Never export with the default op (100% power); export G-code with the device disconnected (the plan pipeline blocks on a live link); verify exported X/Y ranges match the framed area.
+6. Burn: operator wears laser glasses, material focused, re-frame at the burn location, start at low power and step up.
 
 ## Examples
 
