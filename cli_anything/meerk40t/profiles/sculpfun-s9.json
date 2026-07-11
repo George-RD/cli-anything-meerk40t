@@ -1,0 +1,13 @@
+{
+  "name": "sculpfun-s9",
+  "device": "grbl",
+  "baud": 115200,
+  "bedwidth": "410mm",
+  "bedheight": "400mm",
+  "has_endstops": false,
+  "notes": "Sculpfun S9 5.5W diode on GRBL 1.1. Bed origin is front-left; +Y moves away from the operator.",
+  "provenance": {
+    "firmware": "Grbl",
+    "verified": true
+  }
+}

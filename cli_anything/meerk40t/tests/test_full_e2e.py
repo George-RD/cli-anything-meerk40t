@@ -218,6 +218,7 @@ class TestBackendE2E(unittest.TestCase):
             operations.classify_elements(backend)
             backend.run("service device start -i grbl")
             self.assertIn("grbl", str(backend.device()).lower())
+            operations.set_operation(backend, 0, "power", 150)
 
             path = self.temp_path("mk_e2e.gcode")
             result = export.export_gcode(backend, path)

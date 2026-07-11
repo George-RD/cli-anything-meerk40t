@@ -17,6 +17,7 @@ from cli_anything.meerk40t.core import operations as operations_mod
 from cli_anything.meerk40t.core import project as project_mod
 from cli_anything.meerk40t.core import session as session_mod
 from cli_anything.meerk40t.utils.meerk40t_backend import Meerk40tBackend
+from cli_anything.meerk40t.utils import profiles as profiles_mod
 from cli_anything.meerk40t.utils.repl_skin import ReplSkin
 # Driver choices for --device. Extracted to a module-level var so the
 # skill_generator regex (which chokes on nested parens in decorators) does
@@ -163,6 +164,29 @@ def mutating(f):
 
 
 # ── Main CLI group ───────────────────────────────────────────────────────────
+def _apply_machine_profile(backend, profile: dict) -> None:
+    """Apply a machine profile's bed dimensions to the active device view.
+
+    Profiles carry ``bedwidth``/``bedheight`` as strings like ``"410mm"``.
+    Assigning them on the active device service (NOT a root-context ``set``,
+    which targets the kernel root context and never reaches the device) and
+    triggering ``realize()`` updates the coordinate view that export placement
+    maths runs against, so plan coordinates and the Y-flip use the real bed.
+    """
+    dev = backend.device()
+    if dev is None:
+        return
+    for attr in ("bedwidth", "bedheight"):
+        value = profile.get(attr)
+        if value:
+            setattr(dev, attr, value)
+    realize = getattr(dev, "realize", None)
+    if callable(realize):
+        try:
+            realize()
+        except Exception:
+            pass
+
 @click.group(cls=MeerkGroup, invoke_without_command=True)
 @click.option("--json/--no-json", "json_mode", default=False, help="Output results as JSON.")
 @click.option("--project", "-p", "project_path", default=None, help="Project SVG file to open.")
@@ -170,6 +194,7 @@ def mutating(f):
 @click.option("--dry-run", is_flag=True, default=False, help="Do not auto-save after mutations.")
 @click.option("--device", "device", type=DEVICE_CHOICES, default="dummy", show_default=True, help="Device driver to activate (dummy, grbl, lihuiyu, moshi, ruida, newly, balor).")
 @click.option("--port", "port", default=None, help="Serial port for the device, e.g. /dev/cu.usbserial-10.")
+@click.option("--machine", "machine", default=None, help="Load a machine profile by name (e.g. sculpfun-s9). The port is only required for serial commands (connect, check, jog, goto, frame, setup); offline commands (export, elements, machine list, project ops) work without one.")
 @click.option("--baud", "baud", default=115200, show_default=True, help="Baud rate for the serial device.")
 @click.pass_context
 def cli(
@@ -181,15 +206,44 @@ def cli(
     device: str,
     port: str | None,
     baud: int,
+    machine: str | None,
 ):
-    """cli-anything-meerk40t - agent CLI for MeerK40t laser software."""
     ctx.ensure_object(dict)
     sys.stdout = _KernelSuppressor(_REAL_STDOUT)
+    ctx.obj["json"] = json_mode
+    ctx.obj["dry_run"] = dry_run
+    ctx.obj["project_path"] = project_path
+
+    # Resolve --machine profile BEFORE starting the backend; an unknown name
+    # is a clean JSON error and must not start the kernel.
+    profile = None
+    if machine is not None:
+        try:
+            profile = profiles_mod.load_profile(machine)
+        except ValueError:
+            profile = None
+        if profile is None:
+            _emit(
+                ctx,
+                {
+                    "error": f"unknown machine profile: {machine!r}",
+                    "known": profiles_mod.available_names(),
+                },
+            )
+            sys.stdout = _REAL_STDOUT
+            ctx.exit(1)
+        if profile.get("device"):
+            device = profile["device"]
+        if profile.get("baud"):
+            baud = profile["baud"]
+
     backend = Meerk40tBackend(device=device, port=port, baud=baud)
     backend.start()
     ctx.obj["backend"] = backend
-    ctx.obj["json"] = json_mode
-    ctx.obj["dry_run"] = dry_run
+
+    # Apply the profile's bed dimensions to the active device view.
+    if profile is not None:
+        _apply_machine_profile(backend, profile)
     ctx.obj["project_path"] = project_path
 
     if session_path:
@@ -578,6 +632,85 @@ def device_physical_home(ctx: click.Context):
     _emit(ctx, device_mod.physical_home(ctx.obj["backend"]))
 
 
+@device.command("detect")
+@click.option("--probe", is_flag=True, default=False, help="Probe each candidate port for GRBL firmware.")
+@click.pass_context
+def device_detect(ctx, probe):
+    """List candidate serial ports (optionally probe each for GRBL)."""
+    _emit(ctx, device_mod.detect(probe=probe))
+
+
+@device.command("check")
+@click.pass_context
+def device_check(ctx):
+    """Preflight the GRBL device: read $N/$$ and verify the configuration."""
+    _emit(ctx, device_mod.check(ctx.obj["backend"]))
+
+
+@device.command("jog")
+@click.argument("dx")
+@click.argument("dy")
+@click.option("--feed", default=600, type=int, help="Feed rate in mm/min.")
+@click.pass_context
+@mutating
+def device_jog(ctx, dx, dy, feed):
+    """Relative jog in machine mm (origin front-left, +Y away from operator)."""
+    _emit(ctx, device_mod.jog(ctx.obj["backend"], float(dx), float(dy), feed=feed))
+
+
+@device.command("goto")
+@click.argument("x")
+@click.argument("y")
+@click.option("--feed", default=3000, type=int, help="Feed rate in mm/min.")
+@click.pass_context
+@mutating
+def device_goto(ctx, x, y, feed):
+    """Absolute jog in machine mm (origin front-left, +Y away from operator)."""
+    _emit(ctx, device_mod.goto(ctx.obj["backend"], float(x), float(y), feed=feed))
+
+
+@device.command("frame")
+@click.argument("x")
+@click.argument("y")
+@click.argument("w")
+@click.argument("h")
+@click.option("--feed", default=1500, type=int, help="Feed rate in mm/min.")
+@click.pass_context
+@mutating
+def device_frame(ctx, x, y, w, h, feed):
+    """Dry-frame a rectangle in machine mm (origin front-left, +Y away)."""
+    _emit(ctx, device_mod.frame(ctx.obj["backend"], float(x), float(y), float(w), float(h), feed=feed))
+
+
+@device.command("setup")
+@click.option("--save-profile", "save_profile", default=None, help="Save a user machine profile with this NAME from the live readback.")
+@click.pass_context
+@mutating
+def device_setup(ctx, save_profile):
+    """Capture the live device configuration into a user machine profile."""
+    if not save_profile:
+        _emit(ctx, {"error": "device setup requires --save-profile NAME", "pass": False})
+        return
+    _emit(ctx, device_mod.setup_profile(ctx.obj["backend"], save_profile))
+
+
+@device.command("machines")
+@click.pass_context
+def device_machines(ctx):
+    """List available machine profiles (alias of `machine list`)."""
+    _emit(ctx, {"profiles": profiles_mod.list_profiles()})
+
+
+@cli.group()
+def machine():
+    """Machine profile management."""
+
+
+@machine.command("list")
+@click.pass_context
+def machine_list(ctx):
+    """List available machine profiles (bundled and user)."""
+    _emit(ctx, {"profiles": profiles_mod.list_profiles()})
 @device.command("move")
 @click.argument("x")
 @click.argument("y")
@@ -654,11 +787,18 @@ def export_png_cmd(ctx: click.Context, path: str, dpi: int):
 
 @export.command("gcode")
 @click.argument("path")
+@click.option("--allow-full-power", is_flag=True, default=False, help="Allow export even if an operation is still at default power 1000.")
 @click.pass_context
 @mutating
-def export_gcode_cmd(ctx: click.Context, path: str):
+def export_gcode_cmd(ctx: click.Context, path: str, allow_full_power: bool):
     """Export project as G-code (best-effort)."""
-    _emit(ctx, export_mod.export_gcode(ctx.obj["backend"], path))
+    try:
+        _emit(ctx, export_mod.export_gcode(ctx.obj["backend"], path, allow_full_power=allow_full_power))
+    except RuntimeError as exc:
+        if ctx.obj.get("json"):
+            click.echo(json.dumps({"error": str(exc)}, indent=2))
+        else:
+            click.echo(f"Error: {exc}", err=True)
 
 
 # ── Console passthrough ───────────────────────────────────────────────────────
@@ -1050,3 +1190,7 @@ def _dispatch_repl(ctx: click.Context, line: str, skin: ReplSkin, commands: dict
             pass
 
     _emit(ctx, result)
+
+
+if __name__ == "__main__":
+    cli()
