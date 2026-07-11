@@ -239,8 +239,10 @@ for i, (sx0, sy0, sx1, sy1) in enumerate(ROOF_SLOTS):
     cut_elements.append((f"chimney_slot_{i}", f"M {fmt(sx0)} {fmt(sy0)} L {fmt(sx1)} {fmt(sy0)} L {fmt(sx1)} {fmt(sy1)} L {fmt(sx0)} {fmt(sy1)} Z"))
 
 # --- chimney net perimeter -------------------------------------------------
-# F1 / F3 are the ridge-parallel faces (angled parallelogram bottoms);
-# F2 / F4 are the perpendicular faces (V-notched bottoms).
+# F1 / F3 are the angled faces (perpendicular to the ridge when folded);
+# F2 / F4 are the ridge-parallel faces. A ridge-parallel face meets the
+# roof plane in a HORIZONTAL line, so F2/F4 get FLAT bottoms that seat on
+# the roof (a V-notch would leave a 7.9 mm gap under each).
 # Top edge is straight at y = CHIM_TOP_Y. Bottom edges follow the roof pitch.
 F1_top_left = (CHIM_X0, CHIM_TOP_Y)
 F1_top_right = (CHIM_X0 + CHIM_FACE_W, CHIM_TOP_Y)
@@ -302,14 +304,12 @@ chimney_perim_points = [
     (glue_x1, F4_bottom_right[1] - glue_chamfer),             # tab right edge
     (glue_x0 + glue_chamfer, F4_bottom_right[1]),             # tab chamfer
     F4_bottom_right,
-    (F4_notch_cx, F4_notch_y),                                # F4 V-notch
     F4_bottom_left,
     _t3a,                                                     # F3 diagonal
     (_t3a[0] + TONGUE_DEPTH * _n3[0], _t3a[1] + TONGUE_DEPTH * _n3[1]),
     (_t3b[0] + TONGUE_DEPTH * _n3[0], _t3b[1] + TONGUE_DEPTH * _n3[1]),
     _t3b,
     F3_bottom_left,
-    (F2_notch_cx, F2_notch_y),                                # F2 V-notch
     F2_bottom_left,
     _t1a,                                                     # F1 diagonal
     (_t1a[0] + TONGUE_DEPTH * _n1[0], _t1a[1] + TONGUE_DEPTH * _n1[1]),
@@ -466,8 +466,9 @@ for x0, x1, peak in ((SIDE_A_X0, SIDE_A_X1, GABLE_A_PEAK),
 
     # King post, split around the circular gable window (y = 35..49)
     cx = peak[0]
-    etch_elements.append((f"gable_king_top_{x0:.0f}", f"M {fmt(cx)} {fmt(ib[1] + 1.5)} L {fmt(cx)} {fmt(GABLE_WIN_CY - GABLE_WIN_R - 1.0)}"))
-    etch_elements.append((f"gable_king_bot_{x0:.0f}", f"M {fmt(cx)} {fmt(GABLE_WIN_CY + GABLE_WIN_R + 1.0)} L {fmt(cx)} {fmt(WALL_TOP)}"))
+    # 2 mm clear of the window cut (and just outside the r+1.5 frame ring)
+    etch_elements.append((f"gable_king_top_{x0:.0f}", f"M {fmt(cx)} {fmt(ib[1] + 1.5)} L {fmt(cx)} {fmt(GABLE_WIN_CY - GABLE_WIN_R - 2.0)}"))
+    etch_elements.append((f"gable_king_bot_{x0:.0f}", f"M {fmt(cx)} {fmt(GABLE_WIN_CY + GABLE_WIN_R + 2.0)} L {fmt(cx)} {fmt(WALL_TOP)}"))
 
 # Roof shingles: staggered horizontal courses, 3 mm clear of edges, skip slot
 y = ROOF_Y0 + ETCH_MARGIN
@@ -513,11 +514,11 @@ def chim_bottom(x):
     """Material bottom edge y at net x inside the chimney strip."""
     if x <= CHIM_X0 + CHIM_FACE_W:                       # F1 diagonal
         return _f1_y(x)
-    if x <= CHIM_X0 + 2 * CHIM_FACE_W:                   # F2 V-notch
-        return F2_notch_y + abs(x - F2_notch_cx) * PITCH_TAN
+    if x <= CHIM_X0 + 2 * CHIM_FACE_W:                   # F2 flat seat
+        return F2_bottom_left[1]
     if x <= CHIM_X0 + 3 * CHIM_FACE_W:                   # F3 diagonal
         return _f3_y(x)
-    return F4_notch_y + abs(x - F4_notch_cx) * PITCH_TAN  # F4 V-notch
+    return F4_bottom_right[1]                             # F4 flat seat
 
 
 def chim_runs(y_need, x0, x1, step=0.25):
@@ -528,7 +529,7 @@ def chim_runs(y_need, x0, x1, step=0.25):
         if ok and start is None:
             start = x
         if (not ok or x >= x1) and start is not None:
-            end = x if not ok else x1
+            end = (x - step) if not ok else x1
             if end - start > 2.0:
                 runs.append((start, end))
             start = None

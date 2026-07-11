@@ -78,7 +78,7 @@ Line up the machine origin with the start of the working window, not the sheet c
 
 5. Place the roof onto the gable slopes. Use the small etched alignment ticks near the panel ends to line it up evenly. The overhangs should be the same on both ends. Glue the roof to the gables along the slope edges.
 
-6. Fold the chimney into a small box. Glue the 6 mm tab. The two angled faces match the roof pitch. The two V-notched faces fit against the roof.
+6. Fold the chimney into a small box. Glue the 6 mm tab. The two angled faces match the roof pitch and sit flush on the slope. The two flat-bottomed faces run parallel to the ridge and seat level on the roof.
 
 7. Push the two locking tongues on the chimney base through the two 3 mm × 8 mm slots in the roof. The slots run up the slope, one under each angled face. Fold the tongues slightly underneath to hold the chimney in place. Add a small dot of glue if needed.
 

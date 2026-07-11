@@ -222,12 +222,12 @@
     <path d="M 303 133 L 377 133" stroke="#000000" stroke-width="0.2" fill="none" id="brick_h_300_133.0_303.0"/>
     <path d="M 131.134 55 L 160 22.526" stroke="#000000" stroke-width="0.2" fill="none" id="gable_r_120"/>
     <path d="M 160 22.526 L 188.866 55" stroke="#000000" stroke-width="0.2" fill="none" id="gable_l_120"/>
-    <path d="M 160 24.026 L 160 34" stroke="#000000" stroke-width="0.2" fill="none" id="gable_king_top_120"/>
-    <path d="M 160 50 L 160 60" stroke="#000000" stroke-width="0.2" fill="none" id="gable_king_bot_120"/>
+    <path d="M 160 24.026 L 160 33" stroke="#000000" stroke-width="0.2" fill="none" id="gable_king_top_120"/>
+    <path d="M 160 51 L 160 60" stroke="#000000" stroke-width="0.2" fill="none" id="gable_king_bot_120"/>
     <path d="M 311.134 55 L 340 22.526" stroke="#000000" stroke-width="0.2" fill="none" id="gable_r_300"/>
     <path d="M 340 22.526 L 368.866 55" stroke="#000000" stroke-width="0.2" fill="none" id="gable_l_300"/>
-    <path d="M 340 24.026 L 340 34" stroke="#000000" stroke-width="0.2" fill="none" id="gable_king_top_300"/>
-    <path d="M 340 50 L 340 60" stroke="#000000" stroke-width="0.2" fill="none" id="gable_king_bot_300"/>
+    <path d="M 340 24.026 L 340 33" stroke="#000000" stroke-width="0.2" fill="none" id="gable_king_top_300"/>
+    <path d="M 340 51 L 340 60" stroke="#000000" stroke-width="0.2" fill="none" id="gable_king_bot_300"/>
     <path d="M 23 163 L 127 163" stroke="#000000" stroke-width="0.2" fill="none" id="shingle_h_163.0"/>
     <path d="M 23 163 L 23 171" stroke="#000000" stroke-width="0.2" fill="none" id="shingle_v_163.0_23.0"/>
     <path d="M 31 163 L 31 171" stroke="#000000" stroke-width="0.2" fill="none" id="shingle_v_163.0_31.0"/>
@@ -416,9 +416,8 @@
     <path d="M 125 279 L 125 284" stroke="#000000" stroke-width="0.2" fill="none" id="roof_tick_bottom_125.0"/>
     <path d="M 153 177 L 203 177" stroke="#000000" stroke-width="0.2" fill="none" id="chim_brick_h_177.0_153.0"/>
     <path d="M 153 184 L 203 184" stroke="#000000" stroke-width="0.2" fill="none" id="chim_brick_h_184.0_153.0"/>
-    <path d="M 153 191 L 198.25 191" stroke="#000000" stroke-width="0.2" fill="none" id="chim_brick_h_191.0_153.0"/>
-    <path d="M 200 191 L 203 191" stroke="#000000" stroke-width="0.2" fill="none" id="chim_brick_h_191.0_200.0"/>
-    <path d="M 153 198 L 192.25 198" stroke="#000000" stroke-width="0.2" fill="none" id="chim_brick_h_198.0_153.0"/>
+    <path d="M 153 191 L 203 191" stroke="#000000" stroke-width="0.2" fill="none" id="chim_brick_h_191.0_153.0"/>
+    <path d="M 153 198 L 203 198" stroke="#000000" stroke-width="0.2" fill="none" id="chim_brick_h_198.0_153.0"/>
     <path d="M 153 177 L 153 184" stroke="#000000" stroke-width="0.2" fill="none" id="chim_brick_v_177.0_153.0"/>
     <path d="M 169 177 L 169 184" stroke="#000000" stroke-width="0.2" fill="none" id="chim_brick_v_177.0_169.0"/>
     <path d="M 185 177 L 185 184" stroke="#000000" stroke-width="0.2" fill="none" id="chim_brick_v_177.0_185.0"/>
@@ -429,6 +428,7 @@
     <path d="M 153 191 L 153 198" stroke="#000000" stroke-width="0.2" fill="none" id="chim_brick_v_191.0_153.0"/>
     <path d="M 169 191 L 169 198" stroke="#000000" stroke-width="0.2" fill="none" id="chim_brick_v_191.0_169.0"/>
     <path d="M 185 191 L 185 198" stroke="#000000" stroke-width="0.2" fill="none" id="chim_brick_v_191.0_185.0"/>
+    <path d="M 201 191 L 201 198" stroke="#000000" stroke-width="0.2" fill="none" id="chim_brick_v_191.0_201.0"/>
   </g>
   <g id="score" stroke="#0000FF" stroke-width="0.2" fill="none">
     <line x1="120" y1="60" x2="120" y2="140" stroke="#0000FF" stroke-width="0.2" fill="none" id="score_x120"/>
@@ -461,6 +461,6 @@
     <path d="M 20 160 L 130 160 L 130 284 L 20 284 Z" stroke="#FF0000" stroke-width="0.2" fill="none" id="roof_perim"/>
     <path d="M 66.5 199.5 L 69.5 199.5 L 69.5 207.5 L 66.5 207.5 Z" stroke="#FF0000" stroke-width="0.2" fill="none" id="chimney_slot_0"/>
     <path d="M 80.5 199.5 L 83.5 199.5 L 83.5 207.5 L 80.5 207.5 Z" stroke="#FF0000" stroke-width="0.2" fill="none" id="chimney_slot_1"/>
-    <path d="M 150 170 L 208 170 L 212 172 L 212 198 L 208 200 L 206 200 L 199 192.125 L 192 200 L 187 205.625 L 189.242 207.618 L 185.242 212.118 L 183 210.125 L 178 215.75 L 171 207.875 L 164 215.75 L 159 210.125 L 156.758 212.118 L 152.758 207.618 L 155 205.625 L 150 200 L 150 170 Z" stroke="#FF0000" stroke-width="0.2" fill="none" id="chimney_perim"/>
+    <path d="M 150 170 L 208 170 L 212 172 L 212 198 L 208 200 L 206 200 L 192 200 L 187 205.625 L 189.242 207.618 L 185.242 212.118 L 183 210.125 L 178 215.75 L 164 215.75 L 159 210.125 L 156.758 212.118 L 152.758 207.618 L 155 205.625 L 150 200 L 150 170 Z" stroke="#FF0000" stroke-width="0.2" fill="none" id="chimney_perim"/>
   </g>
 </svg>
