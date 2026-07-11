@@ -10,7 +10,7 @@ All tests use the Python standard library `unittest` module (no pytest). The bac
 
 | File | Count | Scope |
 |------|-------|-------|
-| `tests/test_core.py` | ~15 unit tests | Backend wrapper, project, elements, operations, session, export modules in isolation. |
+| `tests/test_core.py` | ~44 unit tests | Backend wrapper, project, elements, operations, session, export, device, and CLI wiring modules in isolation. |
 | `tests/test_full_e2e.py` | ~12 E2E tests | CLI subprocess workflows, backend round-trips, and realistic laser-job scenarios. |
 
 Both test modules create fresh backends in `setUp` and tear them down in `tearDown`. E2E tests that exercise the installed CLI also fall back to `python -m cli_anything.meerk40t.meerk40t_cli` if the console script is not on `PATH`.
@@ -57,6 +57,21 @@ Both test modules create fresh backends in `setUp` and tear them down in `tearDo
 - `test_export_svg` — `export.export_svg(...)` writes a valid, non-empty SVG file.
 - `test_export_svgz` — `export.export_svgz(...)` writes a non-empty compressed SVGZ file.
 - `test_export_png_raises_without_renderer` — `export.export_png(...)` raises `RuntimeError` in headless mode because `render-op/make_raster` is not registered.
+
+### `TestDevice` — device commands
+- `test_default_device_is_dummy` — a fresh `Meerk40tBackend()` reports `kernel.device` is a `DummyDevice` (default behaviour unchanged).
+- `test_list_devices_returns_active` — `device.list_devices(...)` returns the active device label and provider.
+- `test_device_status_has_connection_state` — `device.device_status(...)` reports `connected` and `port` without touching any serial port.
+- `test_connect_dummy_returns_error_shape` — `device.connect(...)` on the dummy device returns an error JSON shape (no connectable controller).
+- `test_disconnect_dummy_returns_error_shape` — `device.disconnect(...)` on the dummy device returns an error JSON shape.
+
+### `TestDeviceConfig` — driver selection without hardware
+- `test_grbl_config_without_opening_serial` — `Meerk40tBackend(device="grbl", port="/dev/fake", baud=115200)` activates a `GRBLDevice` with `serial_port="/dev/fake"` and `controller.connection.connected == False`; no serial port is opened.
+
+### `TestCliDevice` — CLI wiring
+- `test_cli_grbl_status_wiring` — `cli-anything-meerk40t --json --device grbl --port /dev/fake device status` returns GRBL device JSON with `connected: false` and opens no serial port.
+- `test_cli_dummy_connect_error_wiring` — `device connect` on the default dummy driver returns the error shape and exits 0.
+- `test_cli_help_lists_device_options` — `--help` lists the `--device`, `--port`, and `--baud` top-level options.
 
 ---
 
@@ -115,7 +130,7 @@ All tests use the helper `_resolve_cli("cli-anything-meerk40t")`, which returns 
 ```
 $ .venv/bin/python -m unittest discover -s cli_anything/meerk40t/tests -p "test_core.py" -v
 
-Ran 34 tests in 1.015s
+Ran 44 tests in 1.49s
 
 OK
 ```
@@ -129,6 +144,9 @@ All 34 unit tests passed:
 - TestExport: 3 tests (svg, svgz, png_raises_without_renderer)
 - TestGeometryTransforms: 5 tests (translate, scale, rotate, align, group_ungroup)
 - TestREPLDispatch: 1 test (dispatch_repl_commands)
+- TestDevice: 5 tests (default_device_is_dummy, list_devices_returns_active, device_status_has_connection_state, connect_dummy_returns_error_shape, disconnect_dummy_returns_error_shape)
+- TestDeviceConfig: 1 test (grbl_config_without_opening_serial)
+- TestCliDevice: 3 tests (cli_grbl_status_wiring, cli_dummy_connect_error_wiring, cli_help_lists_device_options)
 
 ### E2E Tests (test_full_e2e.py)
 
@@ -148,9 +166,9 @@ All 14 E2E tests passed:
 
 | Suite | Tests | Passed | Failed | Time |
 |---|---|---|---|---|
-| test_core | 34 | 34 | 0 | 1.02s |
+| test_core | 44 | 44 | 0 | 1.49s |
 | test_full_e2e | 14 | 14 | 0 | 7.00s |
-| **Total** | **48** | **48** | **0** | **8.02s** |
+| **Total** | **58** | **58** | **0** | **8.49s** |
 
 Pass rate: 100%
 
@@ -164,6 +182,9 @@ Pass rate: 100%
 - SVGZ (compressed) export tested
 - PNG export correctly errors in headless mode (no renderer)
 - G-code export verified with real GRBL device — output contains real G/M codes
+- Device connect/disconnect return an error shape on the dummy driver (no serial port touched)
+- CLI `--device`/`--port`/`--baud` options wire the GRBL driver without opening a serial port
+- GRBL configuration verified as `GRBLDevice` with `controller.connection.connected == False`
 - CLI subprocess tests use `_resolve_cli()` and the installed command
 - Persistence across CLI invocations verified via `-p` flag
 - Console passthrough verified

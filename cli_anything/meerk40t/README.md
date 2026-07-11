@@ -109,11 +109,39 @@ cli-anything-meerk40t -s /tmp/session.json session undo
 | `project` | New, open, save, info, close (SVG project files) |
 | `elements` | Circle, rect, ellipse, line, polyline, text, list, delete, select, clear, frame, translate, scale, rotate, align, group, ungroup |
 | `operations` | List, add (cut/engrave/raster/image/dots), classify, declassify, set, delete, clear |
-| `device` | List, status, home, physical-home, move, info |
+| `device` | List, status, home, physical-home, move, info, connect, disconnect |
 | `export` | SVG, SVGZ (real backend); PNG (GUI-dependent); G-code (GRBL device required) |
 | `console` | Raw passthrough to the MeerK40t kernel console |
 | `session` | Undo, redo, history, status |
 | `repl` | Interactive shell (default) |
+
+## Driving real hardware
+
+The driver is selected with top-level options before any subcommand:
+
+```bash
+cli-anything-meerk40t --device grbl --port /dev/cu.usbserial-10 --baud 115200
+```
+
+Supported drivers: `dummy` (default, no hardware), `grbl`, `lihuiyu`,
+`moshi`, `ruida`, `newly`, `balor`. Start a REPL so the connection to the
+device controller persists across commands:
+
+```bash
+cli-anything-meerk40t --device grbl --port /dev/cu.usbserial-10
+# Inside the REPL:
+device status     # port/baud, connected=false
+device connect    # opens the controller/transport connection
+device status     # connected=true
+device disconnect # closes the connection
+```
+
+`device connect`/`device disconnect` call the active device's
+`controller.open()`/`controller.close()`; there is no `connect` console
+command in MeerK40t. The dummy device has no connectable controller, so
+`device connect` returns an error shape rather than touching any port. Each
+one-shot command boots a fresh backend and shuts it down on exit, so keep a
+session open in the REPL to maintain the link.
 
 ## Export formats
 

@@ -7,6 +7,7 @@ frameworks are required; only the standard library unittest is used.
 from __future__ import annotations
 
 import os
+import json
 import shutil
 import tempfile
 import unittest
@@ -17,6 +18,7 @@ from cli_anything.meerk40t.core import export
 from cli_anything.meerk40t.core import operations
 from cli_anything.meerk40t.core import project
 from cli_anything.meerk40t.core import session
+from cli_anything.meerk40t.core import device as device_mod
 from cli_anything.meerk40t.utils.meerk40t_backend import Meerk40tBackend
 
 
@@ -92,6 +94,57 @@ class TestBackend(BackendTestCase):
         self.assertIsInstance(text, str)
         self.assertGreater(len(text), 0)
         self.assertIn("circle", text.lower())
+
+
+class TestDevice(BackendTestCase):
+    def test_default_device_is_dummy(self):
+        # The default backend must stay on the dummy driver unchanged.
+        self.assertEqual(type(self.backend.device()).__name__, "DummyDevice")
+
+    def test_list_devices_returns_active(self):
+        result = device_mod.list_devices(self.backend)
+        self.assertIn("devices", result)
+        self.assertIn("active", result)
+        self.assertIsInstance(result["devices"], list)
+        self.assertEqual(result["active"]["label"], "Dummy Device")
+
+    def test_device_status_has_connection_state(self):
+        result = device_mod.device_status(self.backend)
+        self.assertIn("connected", result)
+        self.assertIn("device", result)
+        self.assertIn("label", result)
+        self.assertIn("position", result)
+        self.assertFalse(result["connected"])
+
+    def test_connect_dummy_returns_error_shape(self):
+        # The dummy device has no connectable controller, so connect()
+        # returns an error shape instead of touching any serial port.
+        result = device_mod.connect(self.backend)
+        self.assertFalse(result["connected"])
+        self.assertIn("error", result)
+        self.assertEqual(result["label"], "Dummy Device")
+
+    def test_disconnect_dummy_returns_error_shape(self):
+        result = device_mod.disconnect(self.backend)
+        self.assertFalse(result["connected"])
+        self.assertIn("error", result)
+
+
+class TestDeviceConfig(unittest.TestCase):
+    def test_grbl_config_without_opening_serial(self):
+        # Starting a grbl backend with a (non-existent) port must set the
+        # serial attributes and leave the connection closed. No real serial
+        # port is opened.
+        backend = Meerk40tBackend(device="grbl", port="/dev/fake", baud=115200)
+        try:
+            backend.start()
+            dev = backend.kernel.device
+            self.assertEqual(type(dev).__name__, "GRBLDevice")
+            self.assertEqual(dev.serial_port, "/dev/fake")
+            self.assertEqual(dev.baud_rate, 115200)
+            self.assertFalse(dev.controller.connection.connected)
+        finally:
+            backend.shutdown()
 
 
 class TestProject(BackendTestCase):
@@ -377,6 +430,55 @@ class TestREPLDispatch(BackendTestCase):
             self.assertTrue(res["deleted"])
             self.assertEqual(self.backend.op_count(), before_ops - 1)
             mock_emit.reset_mock()
+
+
+class TestCliDevice(unittest.TestCase):
+    """CLI-level wiring tests (catch Click option/decorator regressions)."""
+
+    def _run_json(self, args):
+        import io
+        from click.testing import CliRunner
+        from cli_anything.meerk40t import meerk40t_cli
+
+        capture = io.StringIO()
+        orig = meerk40t_cli._REAL_STDOUT
+        meerk40t_cli._REAL_STDOUT = capture
+        try:
+            runner = CliRunner()
+            result = runner.invoke(meerk40t_cli.cli, ["--json"] + args)
+        finally:
+            meerk40t_cli._REAL_STDOUT = orig
+        return result, capture.getvalue()
+
+    def test_cli_grbl_status_wiring(self):
+        result, out = self._run_json(
+            ["--device", "grbl", "--port", "/dev/fake", "--baud", "115200", "device", "status"]
+        )
+        self.assertEqual(result.exit_code, 0, result.output)
+        data = json.loads(out)
+        self.assertEqual(data["type"], "GRBLDevice")
+        self.assertEqual(data["port"], "/dev/fake")
+        self.assertEqual(data["baud"], 115200)
+        # No serial port is opened by device status.
+        self.assertFalse(data["connected"])
+
+    def test_cli_dummy_connect_error_wiring(self):
+        result, out = self._run_json(["device", "connect"])
+        self.assertEqual(result.exit_code, 0, result.output)
+        data = json.loads(out)
+        self.assertFalse(data["connected"])
+        self.assertIn("error", data)
+
+    def test_cli_help_lists_device_options(self):
+        from click.testing import CliRunner
+        from cli_anything.meerk40t import meerk40t_cli
+
+        runner = CliRunner()
+        result = runner.invoke(meerk40t_cli.cli, ["--help"])
+        self.assertEqual(result.exit_code, 0, result.output)
+        self.assertIn("--device", result.output)
+        self.assertIn("--port", result.output)
+        self.assertIn("--baud", result.output)
 
 
 if __name__ == "__main__":

@@ -38,9 +38,19 @@ class Meerk40tBackend:
     this raises ``RuntimeError`` with install instructions.
     """
 
-    def __init__(self, profile: str = "MeerK40t_CLI", ignore_settings: bool = True):
+    def __init__(
+        self,
+        profile: str = "MeerK40t_CLI",
+        ignore_settings: bool = True,
+        device: str = "dummy",
+        port: Optional[str] = None,
+        baud: int = 115200,
+    ):
         self.profile = profile
         self.ignore_settings = ignore_settings
+        self.device_type = device
+        self.port = port
+        self.baud = baud
         self._kernel: Optional[Any] = None
         self._lock = threading.RLock()
         self._captured: list[str] = []
@@ -104,7 +114,28 @@ class Meerk40tBackend:
 
             kernel(partial=True)
             kernel.console("channel print console\n")
-            kernel.console("service device start dummy 0\n")
+
+            if self.device_type and self.device_type != "dummy":
+                kernel.console(f"service device start -i {self.device_type} 0\n")
+                dev = kernel.device
+                if self.port is not None and hasattr(dev, "serial_port"):
+                    try:
+                        dev.serial_port = self.port
+                    except Exception:
+                        pass
+                if self.baud is not None and hasattr(dev, "baud_rate"):
+                    try:
+                        dev.baud_rate = self.baud
+                    except Exception:
+                        pass
+            else:
+                kernel.console("service device start dummy 0\n")
+            # Register the base-device console commands (device, devinfo, activate,
+            # ...). This must run AFTER a device is active: basedevice's boot
+            # lifecycle auto-starts its `preferred_device` (lhystudios) when
+            # `kernel.device` is still unset, which would hijack the default.
+            from meerk40t.device import basedevice
+            basedevice.plugin(kernel, "boot")
 
             # Capture console channel output.
             kernel._console_channel.watch(self._on_channel)
