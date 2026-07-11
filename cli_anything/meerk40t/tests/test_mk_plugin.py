@@ -303,8 +303,6 @@ class BridgePluginTest(unittest.TestCase):
             mk.apply_backfill_patches = real_apply
 
 
-if __name__ == "__main__":
-    unittest.main()
 
 
 class WebServerRuntimePatchTest(unittest.TestCase):
@@ -375,3 +373,26 @@ class WebServerRuntimePatchTest(unittest.TestCase):
         self.assertTrue(mk._patch_web_server(mod, lambda m: None, {}, "test"))
         # Second application: marker set, source already fixed
         self.assertFalse(mk._patch_web_server(mod, lambda m: None, {}, "test"))
+
+
+class BridgeStatusCommandTest(unittest.TestCase):
+    """bridge_status console command registers once and reports patch state."""
+
+    def test_bridge_status_registered_and_idempotent(self):
+        import cli_anything.meerk40t.mk_plugin as mk
+        from meerk40t.kernel import Kernel
+
+        k = Kernel("MeerK40t", "0.0.0-bst", "MeerK40t_BST", ansi=False, ignore_settings=True)
+        mk.apply_backfill_patches(k)
+        mk.apply_backfill_patches(k)  # idempotent second run
+        self.assertTrue(getattr(k, "_cli_anything_bridge_status", False))
+        captured = []
+        k.channel("console").watch(lambda msg, *a, **kw: captured.append(str(msg)))
+        k.console("bridge_status\n")
+        text = "\n".join(captured)
+        self.assertIn("cli-anything meerk40t bridge", text)
+        for name in (mk.PATCH_HANDOVER, mk.PATCH_TYPED, mk.PATCH_FEEDBACK):
+            self.assertIn(name, text)
+
+if __name__ == "__main__":
+    unittest.main()

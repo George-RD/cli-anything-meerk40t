@@ -1,6 +1,6 @@
 ---
 name: cli-anything-meerk40t
-description: Use when driving laser cutting/engraving through the cli-anything-meerk40t headless CLI - designing jobs (elements, operations, SVG/G-code export), detecting and preflighting a real GRBL laser, driving motion (jog, goto, frame), choosing power and speed for a material, or diagnosing placement and motion failures. Does not cover operating the MeerK40t GUI.
+description: Use when working a laser through cli-anything-meerk40t - designing jobs headlessly (elements, operations, SVG/G-code export), detecting and preflighting a real GRBL laser, driving motion (jog, goto, frame), choosing power and speed for a material, diagnosing placement and motion failures, or remotely operating a running MeerK40t GUI via its console server (bridge plugin required).
 ---
 
 # cli-anything-meerk40t
@@ -23,6 +23,7 @@ every new material at low power and step up, never down.
 | Pick power/speed for a material | know the machine's `$30` scale | power ladder on scrap first | [references/materials.md](references/materials.md) |
 | Burn a job | full safety gate + connection verified Idle (below) | connect, verify, re-frame at the burn location, then spool | [references/hardware.md](references/hardware.md) |
 | Head offset, noise, or lost position | stop motion first | diagnose before trusting placement | [references/hardware.md](references/hardware.md) |
+| Operate a running MeerK40t GUI remotely (console server) | bridge plugin loaded (`bridge_status`) | connection-first gate, stage job, operator presses Start | [references/gui-operation.md](references/gui-operation.md) |
 
 ## Non-negotiable gates
 
@@ -55,8 +56,11 @@ every new material at low power and step up, never down.
   coordinate conventions, failure diagnosis, when to re-frame.
 - [references/materials.md](references/materials.md) - power and speed
   method, the power-ladder first test, field-verified data points.
+- [references/gui-operation.md](references/gui-operation.md) - remote GUI
+  operation over the console server: bridge-plugin gate, connection-first
+  order, staging jobs the operator starts, telnet quirks.
 
-Scope: this skill covers the headless CLI only (matching its description).
-Driving the MeerK40t GUI remotely (consoleserver) is a different mode with
-different failure characteristics; the GUI's Outline/trace has unverified
-beam behaviour and is not a substitute for `device frame`.
+The CLI is the default, fully supported path. Remote GUI operation needs the
+bundled bridge plugin (it back-fills upstream meerk40t#3249 fixes on stock
+MeerK40t at runtime); the GUI's Outline/trace has unverified beam behaviour
+and is never a substitute for `device frame`.

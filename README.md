@@ -126,11 +126,15 @@ and failure diagnosis live in the skill's
 
 ## Status
 
-v1.3.0. 108 unit tests and 13 E2E tests pass, 100% pass rate.
+v1.3.0. 109 unit tests and 13 E2E tests pass, 100% pass rate.
 
 Live-verified against a Sculpfun S9 (GRBL 1.1h, CH340) on macOS.
 
-Out of scope: GUI replacement, non-GRBL hardware so far, and camera support.
+Out of scope: replacing the GUI, non-GRBL hardware so far, and camera
+support. Operating a *running* GUI remotely (console server) is covered by
+the skill's [gui-operation reference](skills/cli-anything-meerk40t/references/gui-operation.md);
+the bundled bridge plugin back-fills the required upstream fixes on stock
+MeerK40t automatically.
 
 ## Testing
 
