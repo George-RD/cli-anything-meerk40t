@@ -82,6 +82,10 @@ Both test modules create fresh backends in `setUp` and tear them down in `tearDo
 - `test_cli_dummy_connect_error_wiring` — `device connect` on the default dummy driver returns the error shape and exits 0.
 - `test_cli_help_lists_device_options` — `--help` lists the `--device`, `--port`, and `--baud` top-level options.
 
+### `TestSkillPackaging` — packaged skill integrity
+- `test_packaged_router_matches_canonical` — the packaged `skills/SKILL.md` is byte-identical to the canonical `skills/cli-anything-meerk40t/SKILL.md` (skipped on installed wheels without the repo tree).
+- `test_every_linked_reference_is_packaged` — every `references/*.md` linked from the router exists in the package and matches the canonical copy.
+
 ---
 
 ## 3. E2E Test Plan (`test_full_e2e.py`)
@@ -104,6 +108,15 @@ All tests use the helper `_resolve_cli("cli-anything-meerk40t")`, which returns 
 - `test_full_workflow` — create a project, add circle/rect/text, classify, export SVG, validate the XML, and assert the file is larger than 1000 bytes. This simulates a realistic laser-job preparation workflow.
 
 ---
+
+## 3b. Bridge Plugin Suite (`test_mk_plugin.py`)
+
+12 tests covering the MeerK40t back-fill bridge plugin: behavioural upstream
+detection, console `set` replacement (typed values, feedback, `-p` path flag),
+console/web server handover transforms, patch idempotence and failure
+isolation, and the runtime web-server patch against a real temp module.
+Together with `test_core.py` (94) this makes 106 unit tests; `test_full_e2e.py`
+adds 13 E2E tests (119 total).
 
 ## 4. Realistic Workflow Scenarios
 

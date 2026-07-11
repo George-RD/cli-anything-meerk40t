@@ -1,17 +1,6 @@
----
-name: laser-engraving
-description: Use when an agent prepares or supervises a real GRBL diode-laser job (safety, origin, power and speed, preflight, coordinates, failure diagnosis) with cli-anything-meerk40t or similar tooling.
----
+# Hardware, safety, and diagnosis
 
-# laser-engraving
-
-The wisdom layer for running a real GRBL diode laser through
-cli-anything-meerk40t. The companion `cli-anything-meerk40t` skill lists every
-command and flag. This skill tells you which values to pick and how to stay
-safe.
-
-Read this before you drive hardware. The laser can injure eyes and start
-fires. The operator must be present for any step that moves or burns.
+*Read before driving a real laser. The operator must be present for any step that moves or burns.*
 
 ## Safety gates
 
@@ -39,30 +28,6 @@ that is safe to call. Set the origin by hand:
 
 Ask the operator to do this. Never call `device physical-home` on these
 machines.
-
-## Power and speed recipes
-
-Start every new material at low power. For cardboard, a first burn at 15%
-power and 1500 mm/min is a safe way to read the result. Step the power up on
-later passes, never down.
-
-- Travel speed is the fast move between cuts (G0). It is not the burn speed.
-- Engrave and cut speed is the feed set per operation (G1). This is what burns
-  the material.
-- Set power and speed on every operation before burning. The auto-created
-  operation defaults to 100% power, which will burn through thin stock.
-
-Use `operations set <id> power <n> speed <mm/min>` to tune each operation.
-
-### Field-verified data points
-
-| Machine | Material | Operation | Result |
-|---|---|---|---|
-| Sculpfun S9 (5.5W diode) | 350gsm kraft card | Vector engrave, 1500 mm/min, 10/15/20% power ladder | All three visible; monotonic intensity increase with power. Relative intensity only: grayscale linearity and repeatability not yet tested. |
-
-A 3-square power ladder (20mm squares, one power step apart) is a cheap first
-test on any new material. It proves the power axis works and gives a starting
-point in one burn.
 
 ## GRBL preflight meaning
 
@@ -106,6 +71,20 @@ front-left origin.
 - Cable snag: the drag cable can catch the gantry and pull the head off
   position. Route the cable so it cannot snag. If it does, re-frame before you
   trust the placement.
+
+## Burn sequence (connection-first)
+
+The spooler accepts jobs even when the serial connection never opened: step
+counts rise, the machine does nothing, and aborting from that state can hang
+the host software. Field-learned order, every burn:
+
+1. Serial port enumerated (`device detect`). A machine power-cycle on CH340
+   adapters may need the USB cable re-seated before the port reappears.
+2. `device connect`, then confirm the controller reports Idle with no alarm
+   and a sane position (`device status`).
+3. Stage the job and set power/speed on every operation.
+4. `device frame` at the burn location; operator confirms placement.
+5. Operator starts the burn and stays until it ends.
 
 ## When to re-frame
 
