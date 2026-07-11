@@ -8,7 +8,7 @@ from setuptools import find_namespace_packages, setup
 
 setup(
     name="cli-anything-meerk40t",
-    version="1.3.0",
+    version="1.4.0",
     description="Agent CLI harness for MeerK40t laser cutting software",
     long_description=(
         "cli-anything-meerk40t is a stateful CLI + REPL that wraps the real "
