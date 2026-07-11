@@ -57,20 +57,30 @@ def _build_ops(backend: Meerk40tBackend) -> list[Any]:
     return backend.ops()
 
 
-def _assign_elements_by_color(backend: Meerk40tBackend) -> dict[str, int]:
-    """Assign every loaded element to the operation matching its stroke colour."""
+def _assign_elements_by_color(backend: Meerk40tBackend) -> tuple[dict[str, int], list[str]]:
+    """Assign every loaded element to the operation matching its stroke colour.
+
+    Returns (counts by colour, descriptions of unassigned drawable elements).
+    Elements with no stroke at all (containers, structural nodes) are skipped;
+    a drawable element with an unrecognised stroke colour is reported so the
+    job cannot silently drop geometry.
+    """
     ops = backend.ops()
     elems = backend.elems()
     color_map = {op["color"]: ops[i] for i, op in enumerate(OPS)}
     counts: dict[str, int] = {}
+    unassigned: list[str] = []
     for e in elems:
-        stroke = str(getattr(e, "stroke", "") or "").lower()
+        raw = getattr(e, "stroke", None)
+        stroke = str(raw or "").lower()
         op = color_map.get(stroke)
         if op is None:
+            if raw is not None and stroke not in ("", "none"):
+                unassigned.append(f"{getattr(e, 'type', '?')} stroke={stroke}")
             continue
         op.add_reference(e)
         counts[stroke] = counts.get(stroke, 0) + 1
-    return counts
+    return counts, unassigned
 
 
 def _set_bed_and_realize(backend: Meerk40tBackend) -> None:
@@ -209,7 +219,7 @@ def prepare_job(input_svg: str, out_dir: str) -> dict[str, Any]:
             _set_bed_and_realize(backend)
             backend.load_file(str(in_path))
             _build_ops(backend)
-            element_counts = _assign_elements_by_color(backend)
+            element_counts, unassigned = _assign_elements_by_color(backend)
             backend.save_svg(str(job_svg_path))
             gcode_result = export.export_gcode(
                 backend, str(gcode_path), allow_full_power=True
@@ -223,12 +233,15 @@ def prepare_job(input_svg: str, out_dir: str) -> dict[str, Any]:
         raise RuntimeError("G-code export produced no output file")
 
     verification = _verify_gcode_file(str(gcode_path))
+    verification["unassigned_elements"] = unassigned
+    verification["no_unassigned"] = not unassigned
     checks = [
         verification["header_ok"],
         verification["travel_s0_ok"],
         verification["burn_s_ok"],
         verification["end_ok"],
         verification["in_bounds"],
+        verification["no_unassigned"],
     ]
     verification["all_passed"] = all(checks)
 
