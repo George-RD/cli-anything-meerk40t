@@ -141,6 +141,7 @@ MeerK40t automatically.
 ```bash
 pip install -e .
 python -m unittest cli_anything.meerk40t.tests.test_core -v
+python -m unittest cli_anything.meerk40t.tests.test_mk_plugin -v
 python -m unittest cli_anything.meerk40t.tests.test_full_e2e -v
 ```
 
