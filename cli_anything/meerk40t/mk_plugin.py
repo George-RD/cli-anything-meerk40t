@@ -432,6 +432,7 @@ def apply_backfill_patches(kernel):
     others or raise into kernel boot.
     """
     channel = _get_channel(kernel)
+    _register_status_command(kernel)
     if _upstream_fixed():
         status = _patch_status(kernel)
         for name in (PATCH_HANDOVER, PATCH_TYPED, PATCH_FEEDBACK):
@@ -440,6 +441,30 @@ def apply_backfill_patches(kernel):
     _patch_network_handover(kernel, channel)
     _patch_set_typed(kernel, channel)
     _patch_set_feedback(kernel, channel)
+
+
+def _register_status_command(kernel):
+    """Register `bridge_status` so operators can verify the back-fill live.
+
+    Idempotent: the plugin runs at several lifecycles; register once.
+    """
+    if getattr(kernel, "_cli_anything_bridge_status", False):
+        return
+    try:
+
+        def bridge_status(channel, _, **kwargs):
+            status = _patch_status(kernel)
+            channel(f"cli-anything meerk40t bridge (upstream PR {UPSTREAM_PR})")
+            for name in (PATCH_HANDOVER, PATCH_TYPED, PATCH_FEEDBACK):
+                channel(f"  {name}: {status.get(name, 'not-applied')}")
+
+        kernel.console_command(
+            "bridge_status",
+            help="Show cli-anything bridge patch status.",
+        )(bridge_status)
+        kernel._cli_anything_bridge_status = True
+    except Exception:
+        pass
 
 
 def plugin(kernel, lifecycle=None):

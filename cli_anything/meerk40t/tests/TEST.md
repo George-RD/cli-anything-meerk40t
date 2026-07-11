@@ -11,10 +11,10 @@ All tests use the Python standard library `unittest` module (no pytest). The bac
 | File | Count | Scope |
 |------|-------|-------|
 | `tests/test_core.py` | 94 unit tests | Backend wrapper, project, elements, operations, session, export, device, serial/GRBL probe parsers, profile overlay, export guard, CLI device/machine command-suite wiring, and packaged-skill integrity. |
-| `tests/test_mk_plugin.py` | 14 unit tests | MeerK40t back-fill bridge plugin: behavioural upstream detection, `set` replacement, handover transforms, patch idempotence, runtime web-server patch. |
+| `tests/test_mk_plugin.py` | 15 unit tests | MeerK40t back-fill bridge plugin: behavioural upstream detection, `set` replacement, handover transforms, patch idempotence, runtime web-server patch. |
 | `tests/test_full_e2e.py` | 13 E2E tests | CLI subprocess workflows, backend round-trips, and realistic laser-job scenarios. |
 
-Total: 108 unit + 13 E2E = 121 tests.
+Total: 109 unit + 13 E2E = 122 tests.
 
 Both test modules create fresh backends in `setUp` and tear them down in `tearDown`. E2E tests that exercise the installed CLI also fall back to `python -m cli_anything.meerk40t.meerk40t_cli` if the console script is not on `PATH`.
 
@@ -118,8 +118,8 @@ All tests use the helper `_resolve_cli("cli-anything-meerk40t")`, which returns 
 detection, console `set` replacement (typed values, feedback, `-p` path flag),
 console/web server handover transforms, patch idempotence and failure
 isolation, and the runtime web-server patch against a real temp module.
-Together with `test_core.py` (94) this makes 108 unit tests; `test_full_e2e.py`
-adds 13 E2E tests (121 total).
+Together with `test_core.py` (94) this makes 109 unit tests; `test_full_e2e.py`
+adds 13 E2E tests (122 total).
 
 ## 4. Realistic Workflow Scenarios
 
@@ -203,7 +203,7 @@ All 13 E2E tests passed:
 | test_core | 94 | 94 | 0 | 2.41s |
 | test_mk_plugin | 14 | 14 | 0 | 0.10s |
 | test_full_e2e | 13 | 13 | 0 | 7.52s |
-| **Total** | **121** | **121** | **0** | **10.03s** |
+| **Total** | **122** | **122** | **0** | **10.03s** |
 
 Pass rate: 100%
 
