@@ -305,3 +305,73 @@ class BridgePluginTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class WebServerRuntimePatchTest(unittest.TestCase):
+    """Runtime (not just transform-purity) coverage for the web-server patch."""
+
+    def _fake_module(self):
+        import importlib.util
+        import os
+        import tempfile
+
+        code = (
+            "class WebServer:\n"
+            "    def __init__(self, context):\n"
+            "        self.context = context\n"
+            "        self.handover = None\n"
+            "        self.debug_channel = lambda m: None\n"
+            "    def send_command(self, command: str) -> None:\n"
+            '        """Send command to kernel for execution"""\n'
+            "        if command:\n"
+            "            # Log to web debug channel\n"
+            '            self.debug_channel(f"[WEB CMD] {command}")\n'
+            "\n"
+            "            if self.handover is None:\n"
+            '                self.context(f"{command}\\n")\n'
+            "            else:\n"
+            "                self.handover(command)\n"
+        )
+        # A real file so inspect.getsource works inside the patcher.
+        fd, path = tempfile.mkstemp(suffix=".py", prefix="fake_web_server_")
+        with os.fdopen(fd, "w") as handle:
+            handle.write(code)
+        self.addCleanup(os.unlink, path)
+        spec = importlib.util.spec_from_file_location(
+            "fake_web_server_%d" % fd, path
+        )
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        return mod
+
+    def test_stock_shape_send_command_is_patched_and_lazy(self):
+        mod = self._fake_module()
+        changed = mk._patch_web_server(mod, lambda m: None, {}, "test")
+        self.assertTrue(changed)
+
+        calls = []
+
+        class Root:
+            @staticmethod
+            def lookup(key):
+                return calls.append(("lookup", key)) or (
+                    lambda cmd: calls.append(("handover", cmd))
+                )
+
+        class Ctx:
+            root = Root()
+
+            def __call__(self, text):
+                calls.append(("console", text))
+
+        ws = mod.WebServer(Ctx())
+        ws.send_command("version")
+        self.assertIn(("lookup", "gui/handover"), calls)
+        self.assertIn(("handover", "version"), calls)
+        self.assertNotIn(("console", "version\n"), calls)
+
+    def test_already_fixed_send_command_no_ops(self):
+        mod = self._fake_module()
+        self.assertTrue(mk._patch_web_server(mod, lambda m: None, {}, "test"))
+        # Second application: marker set, source already fixed
+        self.assertFalse(mk._patch_web_server(mod, lambda m: None, {}, "test"))
