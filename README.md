@@ -18,6 +18,9 @@ for AI agents.
 # Install the CLI harness
 pip install cli-anything-meerk40t
 
+# Or install the agent skill with npx:
+npx skills add George-RD/cli-anything-meerk40t --skill cli-anything-meerk40t -g -y
+
 # Verify
 cli-anything-meerk40t --help
 ```
@@ -50,7 +53,8 @@ cli-anything-meerk40t
 | `project` | new, open, save, info, close (SVG project files) |
 | `elements` | circle, rect, ellipse, line, polyline, text, list, delete, select, clear, frame |
 | `operations` | list, add (cut/engrave/raster/image/dots), classify, declassify, set |
-| `device` | list, status, home, physical-home, move, info, connect, disconnect |
+| `device` | list, status, home, physical-home, move, info, connect, disconnect, detect, check, jog, goto, frame, setup |
+| `machine` | list profiles (bundled and user, with origin) |
 | `export` | svg, svgz (real backend); png (GUI-dependent); gcode (GRBL device required) |
 | `console` | Raw passthrough to the MeerK40t kernel console |
 | `session` | undo, redo, history, status |
@@ -65,8 +69,10 @@ cli-anything-meerk40t --device grbl --port /dev/cu.usbserial-10 --baud 115200
 ```
 
 Supported drivers: `dummy` (default, no hardware), `grbl`, `lihuiyu`,
-`moshi`, `ruida`, `newly`, `balor`. Start a REPL so the connection to the
-device controller persists across commands:
+`moshi`, `ruida`, `newly`, `balor`. Load a bundled or user machine
+profile with `--machine PROFILE` (requires `--port`); it sets the driver,
+baud, and bed size. List profiles with `machine list`. Start a REPL so the
+connection to the device controller persists across commands:
 
 ```bash
 cli-anything-meerk40t --device grbl --port /dev/cu.usbserial-10
@@ -98,7 +104,7 @@ python -m unittest cli_anything.meerk40t.tests.test_core -v
 python -m unittest cli_anything.meerk40t.tests.test_full_e2e -v
 ```
 
-38 tests, 100% pass rate.
+69 unit tests and 13 E2E tests pass — 100% pass rate.
 
 ## License
 

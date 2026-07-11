@@ -10,8 +10,8 @@ All tests use the Python standard library `unittest` module (no pytest). The bac
 
 | File | Count | Scope |
 |------|-------|-------|
-| `tests/test_core.py` | 50 unit tests | Backend wrapper, project, elements, operations, session, export, device, and CLI wiring modules in isolation. |
-| `tests/test_full_e2e.py` | ~12 E2E tests | CLI subprocess workflows, backend round-trips, and realistic laser-job scenarios. |
+| `tests/test_core.py` | 69 unit tests | Backend wrapper, project, elements, operations, session, export, device, serial/GRBL probe parsers, profile overlay, export guard, and CLI device/machine command-suite wiring in isolation. |
+| `tests/test_full_e2e.py` | 13 E2E tests | CLI subprocess workflows, backend round-trips, and realistic laser-job scenarios. |
 
 Both test modules create fresh backends in `setUp` and tear them down in `tearDown`. E2E tests that exercise the installed CLI also fall back to `python -m cli_anything.meerk40t.meerk40t_cli` if the console script is not on `PATH`.
 
@@ -99,7 +99,7 @@ All tests use the helper `_resolve_cli("cli-anything-meerk40t")`, which returns 
 - `test_persistence` — `cli-anything-meerk40t --json -p /tmp/mk_e2e_p.svg elements circle 1in 1in 1in` followed by `cli-anything-meerk40t --json -p /tmp/mk_e2e_p.svg elements list` yields a non-empty list.
 
 ### `TestBackendE2E` — real backend round-trips
-- `test_gcode_export_with_grbl` — create a backend, add a circle, classify, activate a GRBL device (`service device start -i grbl`), then `export.export_gcode(...)` writes a file containing G-code tokens such as `G90`, `G0`, or `M4`.
+- `test_gcode_export_with_grbl` — create a backend, add a circle, classify, set the operation power to 150 (avoiding the default-power export guard), activate a GRBL device (`service device start -i grbl`), then `export.export_gcode(...)` writes a file containing G-code tokens such as `G90`, `G0`, or `M4`.
 - `test_svg_round_trip` — create a backend, add a circle and a rectangle, save an SVG, create a new backend, load the SVG, and assert at least two elements are restored.
 - `test_full_workflow` — create a project, add circle/rect/text, classify, export SVG, validate the XML, and assert the file is larger than 1000 bytes. This simulates a realistic laser-job preparation workflow.
 
@@ -138,12 +138,12 @@ All tests use the helper `_resolve_cli("cli-anything-meerk40t")`, which returns 
 ```
 $ .venv/bin/python -m unittest discover -s cli_anything/meerk40t/tests -p "test_core.py" -v
 
-Ran 50 tests in 1.487s
+Ran 69 tests in 1.740s
 
 OK
 ```
 
-All 50 unit tests passed:
+All 69 unit tests passed:
 - TestBackend: 7 tests (start/shutdown, run/capture, save_svg, load_file, elems, ops, help_text)
 - TestProject: 4 tests (create, open_nonexistent, save, info)
 - TestElements: 8 tests (circle, rect_stroke_fill, ellipse, line, text, list, delete, clear)
@@ -157,28 +157,35 @@ All 50 unit tests passed:
 - TestCliDevice: 3 tests (cli_grbl_status_wiring, cli_dummy_connect_error_wiring, cli_help_lists_device_options)
 - TestDeviceProviderAlias: 2 tests (lihuiyu_alias_resolves_to_lhystudios, backend_lihuiyu_starts_lhystudios_device)
 - TestDeviceConnectError: 1 test (connect_grbl_fake_port_returns_error)
+- TestGrblParsers: 5 tests (parse_settings_canned, parse_startup_blocks_canned, parse_grbl_probe_banner, parse_grbl_probe_ver_and_state, parse_grbl_probe_empty)
+- TestJogRefusalWithoutConnection: 3 tests (jog_refused, goto_refused, frame_refused)
+- TestFrameCornerMath: 1 test (frame_traces_five_corners)
+- TestProfileOverlay: 4 tests (user_overrides_bundled, user_only_profile, unknown_profile_is_none, available_names_includes_both)
+- TestSetupProfileWrites: 2 tests (setup_writes_correct_json, setup_writes_via_config_home_env)
+- TestExportGuard: 2 tests (export_gcode_refuses_default_power, parse_placement_summary)
+- TestCliMachineProfile: 2 tests (cli_unknown_machine_error, cli_machine_list_bundled)
 
 ### E2E Tests (test_full_e2e.py)
 
 ```
 $ .venv/bin/python -m unittest discover -s cli_anything/meerk40t/tests -p "test_full_e2e.py" -v
 
-Ran 14 tests in 7.004s
+Ran 13 tests in 8.827s
 
 OK
 ```
 
-All 14 E2E tests passed:
+All 13 E2E tests passed:
 - TestCLISubprocess: 10 tests (help, project_new_json, elements_circle_json, elements_rect_stroke_fill, elements_list, export_svg, console_passthrough, persistence, elements_transformations_cli, operations_management_cli) — all via the installed `cli-anything-meerk40t` command
-- TestBackendE2E: 4 tests (gcode_export_with_grbl, svg_round_trip, full_workflow)
+- TestBackendE2E: 3 tests (gcode_export_with_grbl, svg_round_trip, full_workflow)
 
 ### Summary Statistics
 
 | Suite | Tests | Passed | Failed | Time |
 |---|---|---|---|---|
-| test_core | 50 | 50 | 0 | 1.487s |
-| test_full_e2e | 14 | 14 | 0 | 7.00s |
-| **Total** | **64** | **64** | **0** | **8.49s** |
+| test_core | 69 | 69 | 0 | 1.740s |
+| test_full_e2e | 13 | 13 | 0 | 8.83s |
+| **Total** | **82** | **82** | **0** | **10.57s** |
 
 Pass rate: 100%
 

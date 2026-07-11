@@ -1,137 +1,91 @@
----
-name: "cli-anything-meerk40t"
-description: "Agent CLI harness for MeerK40t laser cutting software — headless project/element/operation/device/export commands with --json output"
----
-
 # cli-anything-meerk40t
 
-Agent CLI harness for **MeerK40t** laser cutting/engraving software. This is a stateful CLI + REPL that wraps the real MeerK40t kernel for headless, agent-driven laser job preparation.
+Agent CLI harness for **MeerK40t** laser software. It is headless, outputs `--json` by default for agents, and wraps the real MeerK40t kernel.
 
 ## Prerequisites
 
-- MeerK40t: `pip install -e .` from meerk40t source (or `pip install meerk40t`)
-- This CLI: `cd agent-harness && pip install -e .`
-- Verify: `cli-anything-meerk40t --help`
+- Python 3.10 or newer
+- `pip install cli-anything-meerk40t`
+- The real MeerK40t kernel (installed automatically)
+- For real hardware: a USB serial port such as `/dev/cu.usbserial-10` and operator laser-safety glasses
 
-## Command Syntax
+## Command syntax
 
 ```bash
-cli-anything-meerk40t [--json] [--project PATH] [--session PATH] [--dry-run] [--device DRIVER] [--port PORT] [--baud BAUD] COMMAND [ARGS]
+cli-anything-meerk40t [--json] [--device DRIVER] [--port PORT] [--baud N] [--machine PROFILE] [--project PATH] [--session PATH] GROUP COMMAND [ARGS]
 ```
 
-- `--json`: Output results as JSON for machine parsing.
-- `--project PATH` / `-p PATH`: SVG project file to open and auto-save after mutations.
-- `--session PATH` / `-s PATH`: Session file for undo/redo and history.
-- `--dry-run`: Do not auto-save after mutations.
-- `--device DRIVER`: Device driver to activate: `dummy` (default), `grbl`, `lihuiyu`, `moshi`, `ruida`, `newly`, `balor`.
-- `--port PORT`: Serial port for the device, e.g. `/dev/cu.usbserial-10`.
-- `--baud BAUD`: Baud rate for the serial device (default 115200).
-- Omitting the subcommand starts the interactive REPL.
+- Top-level flags: `--json` (machine-readable output), `--device DRIVER` (dummy, grbl, lihuiyu, moshi, ruida, newly, balor), `--port PORT`, `--baud N`, `--machine PROFILE` (load a bundled or user profile), `--project PATH`, `--session PATH`.
+- Every command supports `--json`.
+- Run with no subcommand for the interactive REPL.
 
-## Command Groups
+## Command groups
 
-### `project` — SVG project management
+| Group | Description |
+|---|---|
+| `project` | new, open, save, info, close (SVG project files) |
+| `elements` | circle, rect, ellipse, line, polyline, text, list, delete, select, clear, frame |
+| `operations` | list, add (cut/engrave/raster/image/dots), classify, declassify, set |
+| `device` | list, status, home, physical-home, move, info, connect, disconnect, detect, check, jog, goto, frame, setup |
+| `machine` | list profiles (bundled and user, with origin) |
+| `export` | svg, svgz (real backend); png (GUI-dependent); gcode (GRBL device required) |
+| `console` | Raw passthrough to the MeerK40t kernel console |
+| `session` | undo, redo, history, status |
+| `repl` | Interactive shell (default) |
 
-Create, open, save, inspect, and close SVG projects.
+## Project workflow
 
-- `project new [--name NAME]` — Create a new empty project.
-- `project open PATH` — Open an existing SVG project.
-- `project save PATH [--version VERSION]` — Save the current project to an SVG file.
-- `project info` — Show project metadata.
-- `project close` — Close the current project.
+`cli-anything-meerk40t --json project new`
+`cli-anything-meerk40t --json --project /tmp/job.svg elements circle 1in 1in 1in`
+`cli-anything-meerk40t --json --project /tmp/job.svg elements rect 2in 2in 1in 1in --stroke red --fill blue`
+`cli-anything-meerk40t --json --project /tmp/job.svg elements list`
+`cli-anything-meerk40t --json operations classify`
+`cli-anything-meerk40t --json export svg /tmp/out.svg`
 
-### `elements` — Shape and object manipulation
+## Device commands
 
-Add geometric primitives and text, list, select, delete, clear, transform, align, and group/ungroup elements.
+`device status` - port/baud and `connected` state.
+`device detect [--probe]` - list serial ports. `device detect` globs ports only and never opens one; with `--probe` it opens each candidate port and writes a GRBL wake/status/`$I` sequence, reporting firmware/version/state.
+`device check` - preflight the loaded project: it connects, reads `$$`/`$N`, and reports pass with reasons (bed bounds, power, feed). It does not burn; `check()` does not disconnect, so run it in the REPL if the connection must persist.
+`device connect` - open the controller/transport connection (REPL).
+`device disconnect` - close the connection.
+`device home` - home the machine (requires a live connection).
+`device physical-home` - home using physical endstops (requires a live connection).
+`device jog DX DY [--feed]` - jog by X/Y millimetres (requires a live connection). Coordinates are MACHINE mm, origin front-left, +Y away.
+`device goto X Y [--feed]` - move to an absolute point in MACHINE mm (requires a live connection).
+`device frame X Y W H [--feed]` - trace the cut bounds with the laser off so placement can be checked (requires a live connection). Coordinates are MACHINE mm, origin front-left, +Y away.
+`device setup --save-profile NAME` - read live `$$` settings from a connected GRBL device and write a user profile (bed size from `$130`/`$131`, firmware in provenance).
 
-- `elements circle CX CY R [--stroke COLOR] [--fill COLOR]` — Add a circle.
-- `elements rect X Y W H [--stroke COLOR] [--fill COLOR]` — Add a rectangle.
-- `elements ellipse CX CY RX RY [--stroke COLOR] [--fill COLOR]` — Add an ellipse.
-- `elements line X1 Y1 X2 Y2 [--stroke COLOR]` — Add a line.
-- `elements polyline X1 Y1 X2 Y2 ... [--stroke COLOR]` — Add a polyline from coordinate pairs.
-- `elements text X Y TEXT [--stroke COLOR] [--fill COLOR]` — Add a text element.
-- `elements list` — List all elements in the project.
-- `elements delete INDEX` — Delete the element at the given index.
-- `elements select INDEX` — Select an element by index.
-- `elements clear` — Remove all elements.
-- `elements frame` — Add a frame element around the project bounds.
-- `elements translate INDEX DX DY [--absolute]` — Translate an element by an offset (or to absolute coordinates). Units are supported (e.g., `10mm`, `2in`).
-- `elements scale INDEX FACTOR` — Scale an element by a numeric factor.
-- `elements rotate INDEX ANGLE` — Rotate an element by an angle (e.g., `90deg`, `1.57rad`).
-- `elements align MODE` — Align selected elements. Modes: `left`, `right`, `top`, `bottom`, `center`, `centerh`, `centerv`.
-- `elements group [-l LABEL]` — Group selected elements together with an optional label.
-- `elements ungroup` — Ungroup the currently selected group elements.
+> The dummy device has no connectable controller, so `device connect` returns an error shape rather than touching any port. `jog`, `goto`, and `frame` refuse without a live connection.
 
-### `operations` — Laser operation management
+## Machine profiles
 
-Add, classify, configure, delete, and clear operations that map elements to laser actions.
+`machine list` - show bundled and user profiles with their origin (`bundled` or `user`).
+`--machine PROFILE` - load a profile that sets the driver, baud, and bed size in one step (requires `--port`). An unknown profile emits a `--json` error listing the available names and exits 1.
+User profiles live in `~/.config/cli-anything-meerk40t/profiles/` (override with `CLI_ANYTHING_CONFIG_HOME`); a user profile wins over a bundled one with the same name.
 
-- `operations list` — List operations.
-- `operations add TYPE` — Add an operation: `cut`, `engrave`, `raster`, `image`, or `dots`.
-- `operations classify` — Classify elements into operations.
-- `operations declassify` — Remove element-to-operation assignments.
-- `operations set INDEX KEY VALUE` — Set a property on an operation by index.
-- `operations delete INDEX` — Delete the operation at the given index.
-- `operations clear` — Remove all operations.
+## Agent guidance
 
-### `device` — Device control and status
-
-Inspect and control laser devices.
-
-- `device list` — List available devices.
-- `device status` — Show current device status (position and connection state).
-- `device home` — Home the device.
-- `device physical-home` — Perform physical home.
-- `device move X Y [--absolute/--relative]` — Move the device to/by coordinates.
-- `device info` — Show device information.
-- `device connect` — Open the active device's controller/transport connection (e.g. GRBL `controller.open()`).
-- `device disconnect` — Close the active device's controller/transport connection (`controller.close()`).
-
-### `export` — Output formats
-
-Export the project to several formats. Not all formats work headless.
-
-- `export svg PATH [--version VERSION]` — Export as SVG (headless, truthful).
-- `export svgz PATH` — Export as compressed SVGZ.
-- `export png PATH [--dpi DPI]` — Export as PNG (requires wxPython GUI renderer).
-- `export gcode PATH` — Export as G-code (requires an active GRBL device).
-
-### `console` — Raw passthrough
-
-Send a raw command directly to the MeerK40t console.
-
-- `console 'COMMAND'` — Execute any MeerK40t console command. Example: `console 'circle 2in 2in 1in'`.
-
-### `session` — Undo, redo, history, and status
-
-Manage the mutable session state.
-
-- `session undo` — Undo the last command.
-- `session redo` — Redo the last undone command.
-- `session history` — Show command history.
-- `session status` — Show session status.
-
-### `repl` — Interactive shell
-
-- `repl` — Start the interactive REPL. This is also the default behavior when no subcommand is provided.
-
-## Agent Guidance
-
-- Use `--json` for machine-readable output on every command.
-- Use `--project PATH` to persist mutations back to an SVG file across invocations.
-- Use `console '...'` as an escape hatch for any MeerK40t console command not exposed directly.
-- Export formats: SVG is fully headless; SVGZ is also fully headless; G-code requires an active GRBL device (select `--device grbl` on the export command; a separate `console 'service device start -i grbl'` does not carry over to the export); PNG requires a wxPython GUI environment.
-- For real hardware, activate the driver with `--device grbl --port /dev/cu.usbserial-10` (or `lihuiyu`, etc.), then open the link with `device connect` and close it with `device disconnect`. Run these inside the REPL so the connection persists: each one-shot command boots a fresh backend and shuts it down on exit. `device status` reports `connected`, `port`, and `baud` without touching the port.
-- Typical workflow: `project new` → add `elements` → `operations classify` → `export svg`.
+- Always pass `--json` so the agent can parse structured results.
+- `--project PATH` is required for element, operation, and export commands (use `--json project new` to create one).
+- The dummy device is for project work only; it cannot burn.
+- Each one-shot command boots a fresh backend and shuts it down on exit, so keep a session open in the REPL to maintain a live connection.
 
 ## Hardware workflow (follow in order)
 
-1. Identify: find the port (`ls /dev/cu.usbserial*`); ask the operator for the machine model (bed size and endstops are not detectable).
-2. Origin (no-endstop machines): never `device physical-home`. Operator powers the machine off, parks the head near the front-left corner, powers on. That position is (0,0).
-3. Connect (in the REPL) and preflight: read `$N` (must be empty) and `$$`; confirm `$32=1`; record `$130`/`$131` (true bed travel) and `$30` (max S value).
-4. Validate motion with `$J=` jogs (cannot fire the laser): 10mm jog with operator confirming direction, centre-and-back round trip, then dry-frame the burn area.
-5. Prepare the job: set bed size from `$130`/`$131` and refresh the coordinate view via `dev.realize()`; set power and speed on every operation (`operations set 0 power 150` = 15% at `$30=1000`). Never export with the default op (100% power); export G-code with the device disconnected (the plan pipeline blocks on a live link); verify exported X/Y ranges match the framed area.
-6. Burn: operator wears laser glasses, material focused, re-frame at the burn location, start at low power and step up.
+Safety gates: the laser is live once connected. The operator must wear laser-safety glasses, confirm material focus, and keep a fire-safe area before burning. `device frame` and `device check` never fire the beam; only `operations execute` (or the raw console `run`) does.
+
+1. Identify the machine: `cli-anything-meerk40t device detect [--probe]`. `device detect` globs ports only; `--probe` opens each candidate and reports firmware/version/state. Bed size, endstops, and firmware are not auto-detectable, so ask the operator for the model.
+2. Establish the work origin (safety, not a command): on machines without endstops, power OFF, park the head near front-left, then power on so (0,0) is the corner. Never call `device physical-home`.
+3. List profiles: `cli-anything-meerk40t machine list` (bundled and user, with origin).
+4. Choose the profile: `cli-anything-meerk40t --machine PROFILE --port /dev/cu.usbserial-10 ...` sets driver, baud, and bed in one step.
+5. Connect: start the persistent REPL, then `device connect` inside it. A one-shot `device connect` opens the link and shuts it down on exit, so use the REPL to keep the connection alive. Expect a controller reset click; read `$N` and `$$`.
+6. Validate motion: `cli-anything-meerk40t device jog DX DY [--feed]` (MACHINE mm, origin front-left, +Y away; the beam cannot fire during `$J=` moves).
+7. Move to a point: `cli-anything-meerk40t device goto X Y [--feed]`.
+8. Dry-frame the area: `cli-anything-meerk40t device frame X Y W H [--feed]` (laser off).
+9. Check the job: `cli-anything-meerk40t device check`. It connects and reads `$$`/`$N` automatically; it does not burn. `check()` does not disconnect, so run it in the REPL if the connection must persist. Set every op's power and speed first (the auto-created op is 100% power).
+10. Capture the profile (optional): `cli-anything-meerk40t device setup --save-profile NAME`.
+11. Burn: `cli-anything-meerk40t operations execute` (or the raw console `run`). Start at low power and step up.
 
 ## Examples
 
@@ -176,15 +130,19 @@ cli-anything-meerk40t --json --session session.json session history
 
 ### 6. Drive a real GRBL diode laser
 
-Find the serial port, then start a persistent REPL session so the connection stays open across commands:
+Find the serial port and pick a machine profile, then start a persistent REPL session so the connection stays open across commands:
 
 ```bash
 ls /dev/cu.usbserial*            # discover the port on macOS
-cli-anything-meerk40t --device grbl --port /dev/cu.usbserial-10
+cli-anything-meerk40t machine list                       # list bundled/user profiles
+cli-anything-meerk40t --machine sculpfun-s9 --port /dev/cu.usbserial-10
 # Inside the REPL:
 device status     # shows port/baud, connected=false
 device connect    # opens the serial connection
 device status     # connected=true
+device detect     # list ports inside the REPL
+device frame 0 0 100 100 --feed 1500   # trace bounds, laser off
+device check      # connect + preflight, does not burn
 device disconnect # closes the serial connection
 exit
 ```

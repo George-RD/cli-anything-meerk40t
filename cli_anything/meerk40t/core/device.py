@@ -17,8 +17,10 @@ the backend at boot.
 """
 
 import re
+import time
 
 from cli_anything.meerk40t.utils.meerk40t_backend import Meerk40tBackend
+from cli_anything.meerk40t.utils import serial_probe
 
 _LIST_ECHO = "device"
 
@@ -223,3 +225,345 @@ def disconnect(backend):
         info["error"] = str(exc)
         return info
     return _connect_result(dev)
+
+
+# ── Port discovery and preflight ────────────────────────────────────────────
+
+
+def detect(probe: bool = False, probe_port_fn=None) -> dict:
+    """List candidate serial ports (and optionally probe each for GRBL).
+
+    Discovery globs ``/dev/cu.usbserial*`` and ``/dev/cu.usbmodem*`` only; it
+    never opens a port. With ``probe`` set, each port is probed in turn via
+    ``serial_probe.probe_port`` (injectable through ``probe_port_fn`` for
+    tests). Returns ``{ports:[{path, probed, firmware, version, state, baud}]}``.
+    """
+    paths = serial_probe.list_serial_ports()
+    ports: list[dict] = []
+    for path in paths:
+        entry = {
+            "path": path,
+            "probed": False,
+            "firmware": None,
+            "version": None,
+            "state": None,
+            "baud": None,
+        }
+        if probe:
+            entry["probed"] = True
+            fn = probe_port_fn or serial_probe.probe_port
+            ident = fn(path)
+            entry["firmware"] = ident.get("firmware")
+            entry["version"] = ident.get("version")
+            entry["state"] = ident.get("state")
+            entry["baud"] = ident.get("baud")
+        ports.append(entry)
+    return {"ports": ports}
+
+def parse_settings(text: str) -> dict:
+    """Parse a ``$$`` settings dump into ``{code: value}`` (code as int)."""
+    settings: dict = {}
+    if not text:
+        return settings
+    for line in text.splitlines():
+        line = line.strip()
+        m = re.match(r"\$(\d+)=(.+?)\s*$", line)
+        if m:
+            settings[int(m.group(1))] = m.group(2).strip()
+    return settings
+
+
+def parse_startup_blocks(text: str) -> dict:
+    """Parse a ``$N`` startup-block dump into ``{startup_blocks:[{index, block}]}``."""
+    blocks: list[dict] = []
+    if not text:
+        return {"startup_blocks": blocks}
+    for line in text.splitlines():
+        line = line.strip()
+        m = re.match(r"\$N(\d+)=(.*)$", line)
+        if m:
+            blocks.append({"index": int(m.group(1)), "block": m.group(2).strip()})
+    return {"startup_blocks": blocks}
+
+
+def _query_controller_response(backend, controller, command: str, timeout: float = 1.0) -> str:
+    """Best-effort capture of a controller's raw reply to ``command``.
+
+    The GRBL controller logs every received line to a ``recv-<label>`` channel,
+    so we watch that channel briefly after writing. Returns the concatenated
+    raw reply (empty on no hardware or no reply).
+    """
+    dev = backend.device()
+    if dev is None:
+        return ""
+    label = getattr(dev, "safe_label", None) or "GRBLDevice"
+    try:
+        channel = backend.kernel.channel(f"recv-{label}")
+    except Exception:
+        channel = None
+    captured: list[str] = []
+
+    def _watch(payload, *args, **kwargs):
+        captured.append(str(payload))
+
+    if channel is not None:
+        try:
+            channel.watch(_watch)
+        except Exception:
+            channel = None
+    try:
+        controller.write(command + "\n")
+        if timeout:
+            time.sleep(timeout)
+    finally:
+        if channel is not None:
+            try:
+                channel.unwatch(_watch)
+            except Exception:
+                pass
+    return "\n".join(captured)
+
+
+def check(backend, settings_text: str = None, startup_text: str = None) -> dict:
+    """Preflight a GRBL device: connect, read ``$N`` and ``$$``, and verify.
+
+    Returns a JSON dict with ``startup_blocks``, ``settings`` and ``checks``
+    (``laser_mode_on`` = ``$32==1``, ``startup_blocks_empty``, bed travel from
+    ``$130``/``$131`` and ``max_s_value`` from ``$30``). ``pass`` is ``False``
+    when startup blocks are non-empty or laser mode is disabled, with a
+    ``reasons`` list explaining each failure.
+
+    ``settings_text``/``startup_text`` are injected canned responses for tests;
+    when omitted the live controller reply (and ``dev.hardware_config``) is
+    used. A failed connection yields a clean JSON error, never a traceback.
+    """
+    dev = backend.device()
+    if dev is None or "grbl" not in str(dev).lower():
+        return {
+            "error": "check requires a grbl device (use --device grbl --port ...)",
+            "pass": False,
+        }
+    conn = connect(backend)
+    if not conn.get("connected"):
+        return {
+            "connected": False,
+            "error": conn.get("error", "connection failed to open"),
+            "pass": False,
+        }
+    controller = getattr(dev, "controller", None)
+    if settings_text is None:
+        # Prefer the parsed hardware_config populated during validation.
+        hw = getattr(dev, "hardware_config", None)
+        if isinstance(hw, dict) and hw:
+            settings_text = "\n".join(f"${k}={v}" for k, v in hw.items())
+        elif controller is not None:
+            settings_text = _query_controller_response(backend, controller, "$$")
+        else:
+            settings_text = ""
+    if startup_text is None and controller is not None:
+        startup_text = _query_controller_response(backend, controller, "$N")
+    settings = parse_settings(settings_text or "")
+    parsed_sb = parse_startup_blocks(startup_text or "")
+    startup_blocks = parsed_sb["startup_blocks"]
+
+    laser_mode_on = settings.get(32) == "1"
+    nonempty_blocks = [b for b in startup_blocks if b["block"]]
+    bed_travel = {"x": settings.get(130), "y": settings.get(131)}
+    checks = {
+        "laser_mode_on": laser_mode_on,
+        "startup_blocks_empty": len(nonempty_blocks) == 0,
+        "bed_travel": bed_travel,
+        "max_s_value": settings.get(30),
+    }
+    reasons: list[str] = []
+    if not laser_mode_on:
+        reasons.append("$32 (laser mode) is not 1; the beam may fire during positioning")
+    if nonempty_blocks:
+        reasons.append(
+            f"{len(nonempty_blocks)} non-empty startup block(s); expected empty"
+        )
+    result = {
+        "startup_blocks": startup_blocks,
+        "settings": settings,
+        "checks": checks,
+        "pass": len(reasons) == 0,
+    }
+    if reasons:
+        result["reasons"] = reasons
+    return result
+
+
+def setup_profile(
+    backend,
+    name,
+    settings_text=None,
+    ident_text=None,
+    config_home=None,
+    save_fn=None,
+):
+    """Save a user machine profile from the live device's readback.
+
+    Runs the same readback as ``check`` (``$$`` and a ``$I`` identity query)
+    and writes ``profiles/<NAME>.json`` into the user config directory. The
+    profile records device, baud, bed dimensions (from ``$130``/``$131``) and
+    firmware provenance. Returns a JSON dict with ``saved`` and the written
+    profile, or a clean ``error`` when the connection fails.
+    """
+    from cli_anything.meerk40t.utils import profiles as profiles_mod
+
+    dev = backend.device()
+    if dev is None or "grbl" not in str(dev).lower():
+        return {
+            "error": "setup requires a grbl device (use --device grbl --port ...)",
+            "saved": False,
+        }
+    conn = connect(backend)
+    if not conn.get("connected"):
+        return {
+            "connected": False,
+            "error": conn.get("error", "connection failed to open"),
+            "saved": False,
+        }
+    controller = getattr(dev, "controller", None)
+    if settings_text is None:
+        hw = getattr(dev, "hardware_config", None)
+        if isinstance(hw, dict) and hw:
+            settings_text = "\n".join(f"${k}={v}" for k, v in hw.items())
+        elif controller is not None:
+            settings_text = _query_controller_response(backend, controller, "$$")
+        else:
+            settings_text = ""
+    if ident_text is None and controller is not None:
+        ident_text = _query_controller_response(backend, controller, "$I")
+    settings = parse_settings(settings_text or "")
+    ident = serial_probe.parse_grbl_probe(ident_text or "")
+
+    baud = None
+    try:
+        baud = backend.get("grbl_baud")
+    except Exception:
+        baud = None
+    if baud is None:
+        baud = getattr(dev, "baud", None)
+
+    bedwidth_mm = settings.get(130)
+    bedheight_mm = settings.get(131)
+    profile = {
+        "name": name,
+        "device": "grbl",
+        "baud": baud,
+        "bedwidth": f"{bedwidth_mm}mm" if bedwidth_mm is not None else None,
+        "bedheight": f"{bedheight_mm}mm" if bedheight_mm is not None else None,
+        "has_endstops": False,
+        "notes": "",
+        "provenance": {
+            "firmware": " ".join(
+                p for p in (ident.get("firmware") or "Grbl", ident.get("version"))
+                if p
+            ).strip() or "Grbl",
+            "verified": True,
+        },
+    }
+    save = save_fn or profiles_mod.save_user_profile
+    path = save(name, profile, config_home=config_home)
+    return {"saved": True, "profile": profile, "path": str(path)}
+
+
+# ── Jog / goto / frame ──────────────────────────────────────────────────────
+
+
+def _require_live_connection(backend):
+    """Return ``(controller, None)`` when a writable live link exists, else
+    ``(None, error_dict)``. Jog/goto/frame must refuse without a connection."""
+    dev = backend.device()
+    if dev is None:
+        return None, {"error": "no active device", "connected": False}
+    controller = getattr(dev, "controller", None)
+    if controller is None or not hasattr(controller, "write"):
+        return None, {
+            "error": "active device has no writable controller",
+            "connected": False,
+        }
+    conn = getattr(controller, "connection", None)
+    if not _connection_state(conn):
+        return None, {
+            "error": "no live connection; run device connect first",
+            "connected": False,
+        }
+    return controller, None
+
+
+def _format_jog(mode: str, x: float, y: float, feed: int) -> str:
+    """Format a GRBL jog command. ``mode`` is ``G91`` (relative) or ``G90``
+    (absolute). Coordinates are machine millimetres (origin front-left, +Y
+    away from the operator)."""
+    return f"$J={mode} X{x} Y{y} F{feed}"
+
+
+def jog(backend, dx: float, dy: float, feed: int = 600) -> dict:
+    """Relative jog via ``$J=G91``. Refuses when no live connection exists."""
+    controller, err = _require_live_connection(backend)
+    if err:
+        err["command"] = "jog"
+        return err
+    line = _format_jog("G91", dx, dy, feed)
+    controller.write(line + "\n")
+    return {
+        "jogged": True,
+        "mode": "relative",
+        "dx": dx,
+        "dy": dy,
+        "feed": feed,
+        "command": line,
+    }
+
+
+def goto(backend, x: float, y: float, feed: int = 3000) -> dict:
+    """Absolute jog via ``$J=G90``. Refuses when no live connection exists."""
+    controller, err = _require_live_connection(backend)
+    if err:
+        err["command"] = "goto"
+        return err
+    line = _format_jog("G90", x, y, feed)
+    controller.write(line + "\n")
+    return {
+        "jogged": True,
+        "mode": "absolute",
+        "x": x,
+        "y": y,
+        "feed": feed,
+        "command": line,
+    }
+
+
+def frame(backend, x: float, y: float, w: float, h: float, feed: int = 1500) -> dict:
+    """Dry-frame a rectangle via five absolute jogs (start corner then the
+    four edges). Returns the ordered corner list that was traced. Refuses
+    when no live connection exists."""
+    controller, err = _require_live_connection(backend)
+    if err:
+        err["command"] = "frame"
+        return err
+    x2 = x + w
+    y2 = y + h
+    corners = [
+        (x, y),
+        (x2, y),
+        (x2, y2),
+        (x, y2),
+        (x, y),
+    ]
+    trace = []
+    for cx, cy in corners:
+        line = _format_jog("G90", cx, cy, feed)
+        controller.write(line + "\n")
+        trace.append({"x": cx, "y": cy, "command": line})
+    return {
+        "framed": True,
+        "x": x,
+        "y": y,
+        "w": w,
+        "h": h,
+        "feed": feed,
+        "corners": trace,
+    }

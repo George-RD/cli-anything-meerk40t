@@ -57,11 +57,12 @@ kernel instance (the same code path as `meerk40t -z`) and drives it via
 1. `project` — new, open, save, info, close (SVG project files)
 2. `elements` — add shapes (circle, rect, line, text, etc.), list, select, delete, translate, scale, rotate, align, group, ungroup
 3. `operations` — list/add/set cut/engrave/raster/image ops, classify elements, delete, clear
-4. `device` — list, status, home, move, connect, disconnect (driver via top-level `--device`/`--port`/`--baud`)
-5. `export` — render SVG/PNG/DXF via the real backend
-6. `console` — pass-through to the raw kernel console (escape hatch)
-7. `session` — undo, redo, history, status
-8. `repl` — interactive stateful shell (default when no subcommand)
+4. `device` — list, status, home, physical-home, move, info, connect, disconnect, detect, check, jog, goto, frame, setup (driver via top-level `--device`/`--port`/`--baud`, or `--machine PROFILE`)
+5. `machine` — list profiles (bundled and user, with origin)
+6. `export` — render SVG/PNG/DXF via the real backend
+7. `console` — pass-through to the raw kernel console (escape hatch)
+8. `session` — undo, redo, history, status
+9. `repl` — interactive stateful shell (default when no subcommand)
 
 ## Output Format
 
@@ -86,57 +87,85 @@ alive across commands.
 
 ## Hardware workflow (GRBL serial machines)
 
-Follow in order. Do not skip steps.
+Follow in order. Do not skip steps. Each numbered step is a single command; the safety gates stay as prose.
 
-### 1. Identify the machine
+Safety gates: the laser is live once connected. The operator must wear laser-safety glasses, confirm material focus, and keep a fire-safe area before burning. `device frame` and `device check` never fire the beam; only `operations execute` (or the raw console `run`) does.
 
-1. Find the port: `ls /dev/cu.usbserial* /dev/cu.usbmodem*`.
-2. Ask the operator for brand and model (not detectable from USB or the
-   GRBL banner). The model determines bed size and endstops.
+### 1. Identify the machine - `device detect [--probe]`
+
+Find the port: `ls /dev/cu.usbserial* /dev/cu.usbmodem*`. Ask the operator for brand and model (not detectable from USB or the GRBL banner); the model determines bed size and endstops.
+
+`cli-anything-meerk40t device detect [--probe]`
+
+`device detect` globs serial ports only and never opens one. With `--probe` it opens each candidate port, writes a GRBL wake/status/`$I` sequence, and reports firmware/version/state.
 
 ### 2. Establish the work origin (machines without endstops)
 
-1. Never call `device physical-home`.
-2. Have the operator power the machine OFF (never hand-move the head while
-   powered; idle steppers may still be energised).
-3. Park the head near the front-left corner, not pressed into the frame.
-4. Power on. The head's position is now (0,0).
+This is a safety step, not a command. Never call `device physical-home`. Have the operator power the machine OFF (never hand-move the head while powered; idle steppers may still be energised), park the head near the front-left corner, then power on. The head's position is now (0,0).
 
-### 3. Connect and preflight
+### 3. List available profiles - `machine list`
 
-1. Confirm with the operator: laser glasses available, bed clear of
-   flammables, gantry unobstructed.
-2. `device connect` (in the REPL; expect a controller reset click).
-3. Read `$N`: confirm startup blocks are empty.
-4. Read `$$`: confirm `$32=1` (laser mode: beam off during positioning).
-5. Record `$130`/`$131` (true bed travel) and `$30` (max S value).
+`cli-anything-meerk40t machine list`
 
-### 4. Validate motion (beam physically cannot fire during `$J=` jogs)
+Lists bundled and user profiles with their origin (bundled or user). Use this to pick a profile name for the next step.
 
-1. Jog 10mm: `$J=G91 X10 Y10 F600`. Operator confirms distance and
-   direction (+X right, +Y away from operator).
-2. Jog to bed centre and back to 0,0. Operator confirms clean return.
-3. Dry-frame the intended burn area with absolute jogs.
+### 4. Choose the driver or machine profile - `--machine PROFILE`
 
-### 5. Prepare the job
+Load a profile that sets driver, baud, and bed in one step:
 
-1. Set bed size from `$130`/`$131`: `console 'set bedwidth 410mm'`,
-   `console 'set bedheight 400mm'`, then refresh the view (`dev.realize()`
-   via the backend; console `set` alone does not refresh).
-2. Set power and speed on every operation before export:
-   `operations set 0 power 150` (S value; 150/$30=15%),
-   `operations set 0 speed 25` (mm/s). Never export with defaults: the
-   auto-created op is 100% power.
-3. Export G-code with the device DISCONNECTED (the plan pipeline blocks on
-   a live serial link).
-4. Verify the exported X/Y ranges match the dry-framed area before sending.
+`cli-anything-meerk40t --machine sculpfun-s9 --port /dev/cu.usbserial-10 ...`
 
-### 6. Burn
+### 5. Connect - `device connect`
 
-1. Operator wears laser glasses; material placed and focused.
-2. Re-frame at the burn location for final placement confirmation.
-3. Start conservative (15% power) and increase, never the reverse.
+Confirm with the operator (laser glasses available, bed clear of flammables, gantry unobstructed), then start the persistent REPL (setup) and open the live connection inside it:
 
+```bash
+cli-anything-meerk40t --machine sculpfun-s9 --port /dev/cu.usbserial-10
+# Inside the REPL:
+device connect
+```
+
+Expect a controller reset click. Read `$N` (confirm startup blocks are empty) and `$$` (confirm `$32=1`, laser mode; record `$130`/`$131` bed travel and `$30` max S).
+
+### 6. Validate motion - `device jog DX DY [--feed]`
+
+The beam physically cannot fire during `$J=` moves. Coordinates are MACHINE mm, origin front-left, +Y away.
+
+`cli-anything-meerk40t device jog 10 10 --feed 600`
+
+Operator confirms distance and direction (+X right, +Y away).
+
+### 7. Move to a point - `device goto X Y [--feed]`
+
+`cli-anything-meerk40t device goto 0 0 --feed 600`
+
+Operator confirms a clean return to origin.
+
+### 8. Dry-frame the burn area - `device frame X Y W H [--feed]`
+
+`cli-anything-meerk40t device frame X Y W H --feed 1500`
+
+Traces the rectangle corners with the laser off so placement can be checked.
+
+### 9. Preflight the job - `device check`
+
+`cli-anything-meerk40t device check`
+
+It connects, reads `$$`/`$N`, and reports pass with reasons (bed bounds, power, feed). It does not burn; `check()` does not disconnect, so run it in the REPL if the connection must persist. Before running check, set power and speed on every operation (`operations set 0 power 150`, `operations set 0 speed 25`); never export with defaults, the auto-created op is 100% power.
+
+### 10. Capture the profile (optional) - `device setup --save-profile NAME`
+
+`cli-anything-meerk40t device setup --save-profile NAME`
+
+Reads live `$$` settings from the connected GRBL device and writes a user profile (bed size from `$130`/`$131`, firmware in provenance).
+
+### 11. Burn - `operations execute`
+
+Operator wears laser glasses; material placed and focused. Re-frame at the burn location for final placement confirmation. Start conservative (15% power) and increase, never the reverse.
+
+`cli-anything-meerk40t operations execute`
+
+(or the raw console `run`).
 ## GUI-visible operation (operator watches, agent controls)
 
 Use when the operator wants to see the job on the MeerK40t canvas and own

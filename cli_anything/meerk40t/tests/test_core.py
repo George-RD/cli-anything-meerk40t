@@ -19,6 +19,8 @@ from cli_anything.meerk40t.core import operations
 from cli_anything.meerk40t.core import project
 from cli_anything.meerk40t.core import session
 from cli_anything.meerk40t.core import device as device_mod
+from cli_anything.meerk40t.utils import serial_probe
+from cli_anything.meerk40t.utils import profiles as profiles_mod
 from cli_anything.meerk40t.utils.meerk40t_backend import Meerk40tBackend
 
 
@@ -587,6 +589,319 @@ class TestCliDevice(unittest.TestCase):
         self.assertIn("--port", result.output)
         self.assertIn("--baud", result.output)
 
+
+class TestGrblParsers(unittest.TestCase):
+    """Pure parser tests on canned GRBL 1.1 output (no hardware opened)."""
+
+    def test_parse_settings_canned(self):
+        text = "$0=10\n$1=25\n$32=1\n$130=410.000\n$131=400.000"
+        settings = device_mod.parse_settings(text)
+        self.assertEqual(settings[0], "10")
+        self.assertEqual(settings[32], "1")
+        self.assertEqual(settings[130], "410.000")
+        self.assertIsInstance(next(iter(settings)), int)
+
+    def test_parse_startup_blocks_canned(self):
+        text = "$N0=\n$N1=G91 G21"
+        blocks = device_mod.parse_startup_blocks(text)["startup_blocks"]
+        self.assertEqual(
+            blocks,
+            [
+                {"index": 0, "block": ""},
+                {"index": 1, "block": "G91 G21"},
+            ],
+        )
+
+    def test_parse_grbl_probe_banner(self):
+        ident = serial_probe.parse_grbl_probe("Grbl 1.1f ['$' for help]")
+        self.assertEqual(ident["firmware"], "Grbl")
+        self.assertEqual(ident["version"], "1.1f")
+        self.assertIsNone(ident["state"])
+
+    def test_parse_grbl_probe_ver_and_state(self):
+        ident = serial_probe.parse_grbl_probe(
+            "[VER:1.1f.20170801:]\n<Idle|WPos:0.000,0.000,0.000>"
+        )
+        self.assertEqual(ident["version"], "1.1f.20170801")
+        self.assertEqual(ident["state"], "Idle")
+
+    def test_parse_grbl_probe_empty(self):
+        ident = serial_probe.parse_grbl_probe("")
+        self.assertIsNone(ident["firmware"])
+        self.assertIsNone(ident["version"])
+        self.assertIsNone(ident["state"])
+
+
+class TestJogRefusalWithoutConnection(BackendTestCase):
+    """jog/goto/frame must refuse without a live connection."""
+
+    def test_jog_refused(self):
+        res = device_mod.jog(self.backend, 10.0, 10.0, feed=600)
+        self.assertFalse(res["connected"])
+        self.assertIn("error", res)
+        self.assertEqual(res["command"], "jog")
+
+    def test_goto_refused(self):
+        res = device_mod.goto(self.backend, 5.0, 5.0, feed=3000)
+        self.assertFalse(res["connected"])
+        self.assertIn("error", res)
+        self.assertEqual(res["command"], "goto")
+
+    def test_frame_refused(self):
+        res = device_mod.frame(self.backend, 0.0, 0.0, 10.0, 10.0, feed=1500)
+        self.assertFalse(res["connected"])
+        self.assertIn("error", res)
+        self.assertEqual(res["command"], "frame")
+
+
+class TestFrameCornerMath(unittest.TestCase):
+    """frame traces the rectangle corners in machine-mm order."""
+
+    def _live_backend(self):
+        class _Conn:
+            connected = True
+
+        class _Controller:
+            def __init__(self):
+                self.connection = _Conn()
+                self.written = []
+
+            def write(self, line):
+                self.written.append(line)
+
+        class _Dev:
+            label = "Fake"
+
+            def __init__(self):
+                self.controller = _Controller()
+
+            def __str__(self):
+                return "FakeDevice"
+
+        dev = _Dev()
+        backend = type("Backend", (), {})()
+        backend.device = lambda: dev
+        return backend, dev.controller
+
+    def test_frame_traces_five_corners(self):
+        backend, controller = self._live_backend()
+        res = device_mod.frame(backend, 10.0, 20.0, 30.0, 40.0, feed=1500)
+        self.assertTrue(res["framed"])
+        expected = [
+            (10.0, 20.0),
+            (40.0, 20.0),
+            (40.0, 60.0),
+            (10.0, 60.0),
+            (10.0, 20.0),
+        ]
+        got = [(c["x"], c["y"]) for c in res["corners"]]
+        self.assertEqual(got, expected)
+        self.assertEqual(len(controller.written), 5)
+        for line in controller.written:
+            self.assertTrue(line.startswith("$J=G90 "))
+            self.assertIn("F1500", line)
+
+
+class TestProfileOverlay(unittest.TestCase):
+    """User profiles win over bundled ones; unknown names resolve to None."""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp(prefix="mk_prof_")
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def _write_user(self, name, payload):
+        d = os.path.join(self.tmp, "profiles")
+        os.makedirs(d, exist_ok=True)
+        with open(os.path.join(d, f"{name}.json"), "w", encoding="utf-8") as fh:
+            json.dump(payload, fh)
+
+    def test_user_overrides_bundled(self):
+        self._write_user(
+            "sculpfun-s9",
+            {"name": "sculpfun-s9", "device": "grbl", "baud": 57600},
+        )
+        prof = profiles_mod.load_profile("sculpfun-s9", config_home=self.tmp)
+        self.assertEqual(prof["baud"], 57600)
+        origins = {p["name"]: p["origin"] for p in profiles_mod.list_profiles(self.tmp)}
+        self.assertEqual(origins["sculpfun-s9"], "user")
+
+    def test_user_only_profile(self):
+        self._write_user("my-creality", {"name": "my-creality", "device": "grbl"})
+        prof = profiles_mod.load_profile("my-creality", config_home=self.tmp)
+        self.assertEqual(prof["name"], "my-creality")
+
+    def test_unknown_profile_is_none(self):
+        self.assertIsNone(profiles_mod.load_profile("ghost", config_home=self.tmp))
+
+    def test_available_names_includes_both(self):
+        self._write_user("my-creality", {"name": "my-creality", "device": "grbl"})
+        names = profiles_mod.available_names(self.tmp)
+        self.assertIn("sculpfun-s9", names)
+        self.assertIn("my-creality", names)
+
+
+class TestSetupProfileWrites(unittest.TestCase):
+    """setup_profile writes a correct JSON profile from injected readback."""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp(prefix="mk_setup_")
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def _grbl_backend(self):
+        class _Conn:
+            connected = False
+
+        class _Controller:
+            def __init__(self):
+                self.connection = _Conn()
+
+            def open(self):
+                self.connection.connected = True
+
+            def write(self, line):
+                pass
+
+            def close(self):
+                self.connection.connected = False
+
+        class _Dev:
+            label = "GRBL"
+            baud = 115200
+
+            def __init__(self):
+                self.controller = _Controller()
+
+            def __str__(self):
+                return "GRBLDevice"
+
+        dev = _Dev()
+        backend = type("Backend", (), {})()
+        backend.device = lambda: dev
+        backend.get = lambda key, default=None: default
+        return backend
+
+    def test_setup_writes_correct_json(self):
+        backend = self._grbl_backend()
+        settings_text = "$32=1\n$130=300.000\n$131=200.000"
+        ident_text = "$I\n[VER:1.1f:]\n"
+        res = device_mod.setup_profile(
+            backend,
+            "myprofile",
+            settings_text=settings_text,
+            ident_text=ident_text,
+            config_home=self.tmp,
+        )
+        self.assertTrue(res["saved"])
+        path = os.path.join(self.tmp, "profiles", "myprofile.json")
+        self.assertTrue(os.path.exists(path))
+        with open(path, encoding="utf-8") as fh:
+            data = json.load(fh)
+        self.assertEqual(data["name"], "myprofile")
+        self.assertEqual(data["device"], "grbl")
+        self.assertEqual(data["baud"], 115200)
+        self.assertEqual(data["bedwidth"], "300.000mm")
+        self.assertEqual(data["bedheight"], "200.000mm")
+        self.assertEqual(data["provenance"]["firmware"], "Grbl 1.1f")
+        self.assertTrue(data["provenance"]["verified"])
+    def test_setup_writes_via_config_home_env(self):
+        # Contract item 2: profile written under a tmpdir pointed to by
+        # CLI_ANYTHING_CONFIG_HOME, with no config_home argument passed.
+        old = os.environ.get("CLI_ANYTHING_CONFIG_HOME")
+        os.environ["CLI_ANYTHING_CONFIG_HOME"] = self.tmp
+        try:
+            backend = self._grbl_backend()
+            res = device_mod.setup_profile(
+                backend,
+                "envprofile",
+                settings_text="$32=1\n$130=410.000\n$131=400.000",
+                ident_text="$I\n[VER:1.1f:]\n",
+            )
+        finally:
+            if old is None:
+                os.environ.pop("CLI_ANYTHING_CONFIG_HOME", None)
+            else:
+                os.environ["CLI_ANYTHING_CONFIG_HOME"] = old
+        self.assertTrue(res["saved"])
+        path = os.path.join(self.tmp, "profiles", "envprofile.json")
+        self.assertTrue(os.path.exists(path))
+        with open(path, encoding="utf-8") as fh:
+            data = json.load(fh)
+        self.assertEqual(data["name"], "envprofile")
+        self.assertEqual(data["bedwidth"], "410.000mm")
+        self.assertEqual(data["provenance"]["firmware"], "Grbl 1.1f")
+
+
+
+class TestExportGuard(unittest.TestCase):
+    """G-code export refuses default-power ops; placement summary parses."""
+
+    def test_export_gcode_refuses_default_power(self):
+        backend = Meerk40tBackend()
+        backend.start()
+        try:
+            operations.add_operation(backend, "cut")
+            path = os.path.join(tempfile.mkdtemp(prefix="mk_exp_"), "job.gcode")
+            res = export.export_gcode(backend, path)
+        finally:
+            backend.shutdown()
+        self.assertIn("error", res)
+        self.assertIn("default_power_ops", res)
+        self.assertFalse(res["pass"])
+
+    def test_parse_placement_summary(self):
+        gcode = (
+            "G0 X10 Y20\n"
+            "G1 X50 Y60 S500 F1000\n"
+            "G1 X10 Y20 S500 F1000\n"
+        )
+        summary = export.parse_placement_summary(gcode, "410mm", "400mm")
+        self.assertEqual(summary["x_range"], [10.0, 50.0])
+        self.assertEqual(summary["y_range"], [20.0, 60.0])
+        self.assertEqual(summary["bed"], {"w": 410.0, "h": 400.0})
+        self.assertEqual(summary["s_values"], [500])
+        self.assertEqual(summary["feeds"], [1000])
+
+
+class TestCliMachineProfile(unittest.TestCase):
+    """CLI-level machine-profile wiring (unknown name -> JSON error, exit 1)."""
+
+    def _run_json(self, args):
+        import io
+        import sys
+        from click.testing import CliRunner
+        from cli_anything.meerk40t import meerk40t_cli
+
+        capture = io.StringIO()
+        orig = meerk40t_cli._REAL_STDOUT
+        meerk40t_cli._REAL_STDOUT = capture
+        try:
+            runner = CliRunner()
+            result = runner.invoke(meerk40t_cli.cli, ["--json"] + args)
+        finally:
+            meerk40t_cli._REAL_STDOUT = orig
+            sys.stdout = orig
+        return result, capture.getvalue()
+
+    def test_cli_unknown_machine_error(self):
+        result, out = self._run_json(["--machine", "ghost", "device", "detect"])
+        self.assertEqual(result.exit_code, 1, result.output)
+        data = json.loads(out)
+        self.assertIn("error", data)
+        self.assertIn("unknown machine profile", data["error"])
+        self.assertIn("sculpfun-s9", data["known"])
+
+    def test_cli_machine_list_bundled(self):
+        result, out = self._run_json(["machine", "list"])
+        self.assertEqual(result.exit_code, 0, result.output)
+        data = json.loads(out)
+        names = [p["name"] for p in data["profiles"]]
+        self.assertIn("sculpfun-s9", names)
+        origins = {p["name"]: p["origin"] for p in data["profiles"]}
+        self.assertEqual(origins["sculpfun-s9"], "bundled")
 
 if __name__ == "__main__":
     unittest.main()

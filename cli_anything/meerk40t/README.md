@@ -109,7 +109,8 @@ cli-anything-meerk40t -s /tmp/session.json session undo
 | `project` | New, open, save, info, close (SVG project files) |
 | `elements` | Circle, rect, ellipse, line, polyline, text, list, delete, select, clear, frame, translate, scale, rotate, align, group, ungroup |
 | `operations` | List, add (cut/engrave/raster/image/dots), classify, declassify, set, delete, clear |
-| `device` | List, status, home, physical-home, move, info, connect, disconnect |
+| `device` | List, status, home, physical-home, move, info, connect, disconnect, detect, check, jog, goto, frame, setup |
+| `machine` | List profiles (bundled and user, with origin) |
 | `export` | SVG, SVGZ (real backend); PNG (GUI-dependent); G-code (GRBL device required) |
 | `console` | Raw passthrough to the MeerK40t kernel console |
 | `session` | Undo, redo, history, status |
@@ -124,8 +125,10 @@ cli-anything-meerk40t --device grbl --port /dev/cu.usbserial-10 --baud 115200
 ```
 
 Supported drivers: `dummy` (default, no hardware), `grbl`, `lihuiyu`,
-`moshi`, `ruida`, `newly`, `balor`. Start a REPL so the connection to the
-device controller persists across commands:
+`moshi`, `ruida`, `newly`, `balor`. Load a bundled or user machine
+profile with `--machine PROFILE` (requires `--port`); it sets the driver,
+baud, and bed size. List profiles with `machine list`. Start a REPL so the
+connection to the device controller persists across commands:
 
 ```bash
 cli-anything-meerk40t --device grbl --port /dev/cu.usbserial-10
