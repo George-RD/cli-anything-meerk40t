@@ -1278,5 +1278,48 @@ class TestProfileSubmitCli(unittest.TestCase):
         self.assertIn("error", data)
         self.assertNotIn("--machine requires --port", out)
 
+
+
+class TestSkillPackaging(unittest.TestCase):
+    """The packaged skill copy must ship the router and every reference it
+    links, byte-identical to the canonical skills/ tree."""
+
+    def _roots(self):
+        import cli_anything.meerk40t as pkg
+
+        pkg_root = os.path.join(os.path.dirname(pkg.__file__), "skills")
+        repo_root = os.path.join(
+            os.path.dirname(pkg.__file__), "..", "..",
+            "skills", "cli-anything-meerk40t",
+        )
+        return os.path.abspath(repo_root), pkg_root
+
+    def test_packaged_router_matches_canonical(self):
+        repo_root, pkg_root = self._roots()
+        if not os.path.isdir(repo_root):
+            self.skipTest("canonical skills/ tree not present (installed wheel)")
+        for rel in ["SKILL.md"]:
+            with open(os.path.join(repo_root, rel), "rb") as a, open(
+                os.path.join(pkg_root, rel), "rb"
+            ) as b:
+                self.assertEqual(a.read(), b.read(), rel)
+
+    def test_every_linked_reference_is_packaged(self):
+        import re
+
+        _, pkg_root = self._roots()
+        router = open(os.path.join(pkg_root, "SKILL.md")).read()
+        refs = set(re.findall(r"\]\((references/[a-z-]+\.md)\)", router))
+        self.assertTrue(refs, "router links no references")
+        for rel in sorted(refs):
+            path = os.path.join(pkg_root, rel)
+            self.assertTrue(os.path.isfile(path), f"missing packaged {rel}")
+            repo_root, _ = self._roots()
+            canonical = os.path.join(repo_root, rel)
+            if os.path.isfile(canonical):
+                with open(canonical, "rb") as a, open(path, "rb") as b:
+                    self.assertEqual(a.read(), b.read(), rel)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -46,7 +46,7 @@ setup(
         ],
     },
     package_data={
-        "cli_anything.meerk40t": ["skills/*.md", "README.md", "profiles/*.json"],
+        "cli_anything.meerk40t": ["skills/*.md", "skills/references/*.md", "README.md", "profiles/*.json"],
     },
     include_package_data=True,
     classifiers=[

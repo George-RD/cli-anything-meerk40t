@@ -7,8 +7,9 @@ human at a terminal, can take a design from SVG to a physically engraved
 object through the real MeerK40t kernel.
 
 Docs: [cli-anything-meerk40t skill](skills/cli-anything-meerk40t/SKILL.md)
-(command usage), [laser-engraving skill](skills/laser-engraving/SKILL.md)
-(laser safety and parameter wisdom), and the [MeerK40t SOP](MEERK40T.md).
+(a router covering command usage, hardware safety, and material settings via
+its [references](skills/cli-anything-meerk40t/references/)), and the
+[MeerK40t SOP](MEERK40T.md).
 
 ## Install
 
@@ -39,7 +40,7 @@ cli-anything-meerk40t --json --project /tmp/job.svg operations set 0 power 15 sp
 # 4. Frame the placement. OPERATOR MUST BE PRESENT: the beam is live once connected.
 cli-anything-meerk40t --machine sculpfun-s9 --port /dev/cu.usbserial-10 device frame 10 10 80 50 --feed 1500
 
-# 5. Export G-code. Burning needs the operator present; read the laser-engraving skill first.
+# 5. Export G-code. Burning needs the operator present; read the skill's references/hardware.md first.
 cli-anything-meerk40t --device grbl --machine sculpfun-s9 --project /tmp/job.svg export gcode /tmp/job.gcode
 ```
 
@@ -55,11 +56,13 @@ for AI agents.
 
 Two skills ship with this harness:
 
-- [`cli-anything-meerk40t`](skills/cli-anything-meerk40t/SKILL.md): agent-facing
-  command usage, JSON contracts, and gotchas.
-- [`laser-engraving`](skills/laser-engraving/SKILL.md): the wisdom layer:
-  safety gates, power and speed recipes, GRBL preflight, coordinates, and
-  failure diagnosis.
+- [`cli-anything-meerk40t`](skills/cli-anything-meerk40t/SKILL.md): the single
+  skill, structured as a router. Its [references](skills/cli-anything-meerk40t/references/)
+  hold the depth: [commands.md](skills/cli-anything-meerk40t/references/commands.md)
+  (CLI usage and JSON contracts), [hardware.md](skills/cli-anything-meerk40t/references/hardware.md)
+  (safety gates, GRBL preflight, coordinates, failure diagnosis), and
+  [materials.md](skills/cli-anything-meerk40t/references/materials.md)
+  (power and speed method plus field-verified data).
 
 ## Command groups
 
@@ -110,8 +113,9 @@ one-shot command boots a fresh backend and shuts it down on exit, so keep a
 session open in the REPL to maintain the link.
 
 Safety gates, origin discipline, power and speed, GRBL preflight, coordinates,
-and failure diagnosis live in the
-[laser-engraving skill](skills/laser-engraving/SKILL.md).
+and failure diagnosis live in the skill's
+[references/hardware.md](skills/cli-anything-meerk40t/references/hardware.md) and
+[references/materials.md](skills/cli-anything-meerk40t/references/materials.md).
 
 ## Export formats
 
@@ -121,7 +125,7 @@ and failure diagnosis live in the
 
 ## Status
 
-v1.3.0. 104 unit tests and 13 E2E tests pass, 100% pass rate.
+v1.3.0. 106 unit tests and 13 E2E tests pass, 100% pass rate.
 
 Live-verified against a Sculpfun S9 (GRBL 1.1h, CH340) on macOS.
 
