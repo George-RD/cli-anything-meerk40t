@@ -87,7 +87,7 @@ session open in the REPL to maintain the link.
 ## Export formats
 
 - **SVG** (default, plain, compressed/svgz) — truthful, rendered by the real MeerK40t SVGWriter. Works headless.
-- **G-code** — generated via the real GRBL `save_job` pipeline. Requires an active GRBL device.
+- **G-code** — generated via the real GRBL `save_job` pipeline. Requires an active GRBL device; select it with `--device grbl` on the export command (each one-shot command boots a fresh backend, so a separate `console 'service device start -i grbl'` does not carry over).
 - **PNG** — requires wxPython GUI. Errors clearly in headless mode.
 
 ## Testing
