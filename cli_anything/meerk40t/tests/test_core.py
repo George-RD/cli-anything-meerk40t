@@ -11,6 +11,7 @@ import json
 import shutil
 import tempfile
 import unittest
+import unittest.mock
 import xml.etree.ElementTree as ET
 
 from cli_anything.meerk40t.core import elements
@@ -24,6 +25,9 @@ from cli_anything.meerk40t.utils import profiles as profiles_mod
 from cli_anything.meerk40t.utils.meerk40t_backend import Meerk40tBackend
 
 import cli_anything.meerk40t.meerk40t_cli as cli_mod
+from cli_anything.meerk40t.utils import submit as submit_mod
+import urllib.parse
+import subprocess
 
 
 class BackendTestCase(unittest.TestCase):
@@ -1083,6 +1087,194 @@ class TestCliMachineProfile(unittest.TestCase):
             ["--machine", "sculpfun-s9", "device", "jog", "10", "10"]
         )
         data = json.loads(out)
+class TestProfileSubmitUnit(unittest.TestCase):
+    """Unit coverage for the community submission module."""
+
+    def setUp(self):
+        self.good = profiles_mod.load_profile("sculpfun-s9")
+        self.assertIsNotNone(self.good)
+
+    def test_validate_accepts_valid_profile(self):
+        self.assertEqual(submit_mod.validate_submission(self.good), [])
+
+    def test_validate_rejects_missing_key(self):
+        bad = dict(self.good)
+        del bad["baud"]
+        errs = submit_mod.validate_submission(bad)
+        self.assertTrue(any("missing required key: baud" in e for e in errs))
+
+    def test_validate_rejects_wrong_type(self):
+        bad = dict(self.good)
+        bad["has_endstops"] = 0  # int where bool expected
+        errs = submit_mod.validate_submission(bad)
+        self.assertTrue(any("must be a bool" in e for e in errs))
+
+    def test_validate_rejects_bool_for_int(self):
+        bad = dict(self.good)
+        bad["baud"] = True  # bool where int expected
+        errs = submit_mod.validate_submission(bad)
+        self.assertTrue(any("must be an int (got bool)" in e for e in errs))
+
+    def test_validate_rejects_empty_provenance(self):
+        bad = dict(self.good)
+        bad["provenance"] = {}
+        errs = submit_mod.validate_submission(bad)
+        self.assertTrue(any("provenance" in e for e in errs))
+
+    def test_issue_url_is_encoded(self):
+        url = submit_mod.build_issue_url(self.good)
+        self.assertTrue(
+            url.startswith(
+                "https://github.com/George-RD/cli-anything-meerk40t/issues/new?"
+            )
+        )
+        self.assertIn("labels=community-profile", url)
+        self.assertNotIn(" ", url)  # fully URL-encoded, no raw spaces
+        parsed = urllib.parse.urlparse(url)
+        qs = urllib.parse.parse_qs(parsed.query)
+        self.assertEqual(qs["labels"], ["community-profile"])
+        title = urllib.parse.unquote(qs["title"][0])
+        self.assertIn("sculpfun-s9", title)
+        body = urllib.parse.unquote(qs["body"][0])
+        self.assertIn("grbl", body)
+        self.assertIn("```json", body)
+
+    def test_gh_installed_detection_true(self):
+        with unittest.mock.patch(
+            "cli_anything.meerk40t.utils.submit.shutil.which",
+            return_value="/usr/bin/gh",
+        ):
+            self.assertTrue(submit_mod.gh_installed())
+
+    def test_gh_installed_detection_false(self):
+        with unittest.mock.patch(
+            "cli_anything.meerk40t.utils.submit.shutil.which",
+            return_value=None,
+        ):
+            self.assertFalse(submit_mod.gh_installed())
+
+    def test_plan_without_yes_has_no_side_effects(self):
+        with unittest.mock.patch(
+            "cli_anything.meerk40t.utils.submit.subprocess.run"
+        ) as mock_run:
+            res = submit_mod.submit_profile("sculpfun-s9", yes=False)
+        self.assertTrue(res["ok"])
+        self.assertIs(res["submitted"], False)
+        self.assertEqual(
+            res["community_file"], "profiles/community/sculpfun-s9.json"
+        )
+        self.assertIn("issue_url", res)
+        mock_run.assert_not_called()
+
+    def test_yes_without_gh_falls_back_to_issue_url(self):
+        with unittest.mock.patch(
+            "cli_anything.meerk40t.utils.submit.shutil.which",
+            return_value=None,
+        ):
+            with unittest.mock.patch(
+                "cli_anything.meerk40t.utils.submit.subprocess.run"
+            ) as mock_run:
+                res = submit_mod.submit_profile("sculpfun-s9", yes=True)
+        self.assertIs(res["submitted"], False)
+        self.assertEqual(res["method"], "issue-url")
+        mock_run.assert_not_called()
+
+    def test_yes_with_gh_opens_pull_request(self):
+        tmp = tempfile.mkdtemp(prefix="mk_sub_")
+        try:
+            fake_pr = "https://github.com/George-RD/cli-anything-meerk40t/pull/1"
+            with unittest.mock.patch(
+                "cli_anything.meerk40t.utils.submit.shutil.which",
+                return_value="/usr/bin/gh",
+            ):
+                with unittest.mock.patch(
+                    "cli_anything.meerk40t.utils.submit.os.getcwd",
+                    return_value=tmp,
+                ):
+                    with unittest.mock.patch(
+                        "cli_anything.meerk40t.utils.submit.subprocess.run",
+                        return_value=subprocess.CompletedProcess(
+                            args=[], returncode=0, stdout=fake_pr
+                        ),
+                    ) as mock_run:
+                        res = submit_mod.submit_profile("sculpfun-s9", yes=True)
+            self.assertIs(res["submitted"], True)
+            self.assertEqual(res["method"], "pull-request")
+            self.assertEqual(res["pr_url"], fake_pr)
+            # git/gh were driven, including the `gh pr create` step.
+            commands = [c.args[0] for c in mock_run.call_args_list]
+            self.assertTrue(any(c[:2] == ["gh", "pr"] for c in commands))
+            self.assertTrue(any(c[:2] == ["git", "push"] for c in commands))
+            # The profile file was staged in the (temp) repo root.
+            staged = os.path.join(tmp, "profiles", "community", "sculpfun-s9.json")
+            self.assertTrue(os.path.exists(staged))
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+
+class TestProfileSubmitCli(unittest.TestCase):
+    """CLI-level wiring for `profile submit` (plan path, no side effects)."""
+
+    def _run_json(self, args):
+        import io
+        import sys
+        from click.testing import CliRunner
+
+        capture = io.StringIO()
+        orig = cli_mod._REAL_STDOUT
+        cli_mod._REAL_STDOUT = capture
+        try:
+            runner = CliRunner()
+            result = runner.invoke(cli_mod.cli, ["--json"] + args)
+        finally:
+            cli_mod._REAL_STDOUT = orig
+            sys.stdout = orig
+        return result, capture.getvalue()
+
+    def test_cli_submit_plan_without_yes(self):
+        result, out = self._run_json(["profile", "submit", "sculpfun-s9"])
+        self.assertEqual(result.exit_code, 0, result.output)
+        data = json.loads(out)
+        self.assertTrue(data["ok"])
+        self.assertIs(data["submitted"], False)
+        self.assertEqual(
+            data["community_file"], "profiles/community/sculpfun-s9.json"
+        )
+        self.assertIn("issue_url", data)
+        # No file was written to the working tree.
+        self.assertFalse(
+            os.path.exists("profiles/community/sculpfun-s9.json")
+        )
+
+    def test_cli_submit_unknown_profile_errors(self):
+        result, out = self._run_json(["profile", "submit", "ghost-machine"])
+        self.assertEqual(result.exit_code, 1, result.output)
+        data = json.loads(out)
+        self.assertIn("error", data)
+        self.assertIn("unknown profile", data["error"])
+
+    def test_cli_submit_invalid_profile_errors(self):
+        tmp = tempfile.mkdtemp(prefix="mk_subinv_")
+        try:
+            bad_path = os.path.join(tmp, "profiles", "broken.json")
+            os.makedirs(os.path.dirname(bad_path), exist_ok=True)
+            with open(bad_path, "w", encoding="utf-8") as fh:
+                json.dump(
+                    {"name": "broken", "device": "grbl", "baud": "fast"},
+                    fh,
+                )
+            with unittest.mock.patch.dict(
+                os.environ, {"CLI_ANYTHING_CONFIG_HOME": tmp}
+            ):
+                result, out = self._run_json(
+                    ["profile", "submit", "broken"]
+                )
+            self.assertEqual(result.exit_code, 1, result.output)
+            data = json.loads(out)
+            self.assertIn("validation_errors", data)
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
         self.assertIn("error", data)
         self.assertNotIn("--machine requires --port", out)
 
