@@ -1,6 +1,6 @@
 ---
 name: cli-anything-meerk40t
-description: Use when preparing or running laser cutting/engraving jobs with MeerK40t - designing jobs headlessly (elements, operations, SVG/G-code export), detecting and preflighting a real GRBL laser, driving motion (jog, goto, frame), choosing power and speed for a material, or diagnosing placement and motion failures.
+description: Use when driving laser cutting/engraving through the cli-anything-meerk40t headless CLI - designing jobs (elements, operations, SVG/G-code export), detecting and preflighting a real GRBL laser, driving motion (jog, goto, frame), choosing power and speed for a material, or diagnosing placement and motion failures. Does not cover operating the MeerK40t GUI.
 ---
 
 # cli-anything-meerk40t
@@ -38,8 +38,9 @@ every new material at low power and step up, never down.
   never opened - steps count up, nothing moves. Order is fixed: port
   enumerated -> `device connect` -> status reports Idle, no alarm -> stage the
   job -> burn. Never queue work against an unverified connection.
-- **Frame before burn.** `device frame` traces the job bounds beam-off;
-  re-frame after any snag, reposition, or new material.
+- **Frame before burn.** `device frame X Y W H` dry-traces an explicit
+  rectangle beam-off - pass the job bounds yourself, it does not derive them.
+  Re-frame after any snag, reposition, or new material.
 - **Coordinates:** `jog`/`goto`/`frame` take MACHINE mm - origin front-left,
   +Y away from the operator. Design space (SVG) is top-left; the export
   applies the Y-flip and prints a placement summary to verify.
@@ -55,6 +56,7 @@ every new material at low power and step up, never down.
 - [references/materials.md](references/materials.md) - power and speed
   method, the power-ladder first test, field-verified data points.
 
-Scope: this skill covers the headless CLI. Driving the MeerK40t GUI remotely
-(consoleserver) is out of scope here; the GUI's Outline/trace has unverified
+Scope: this skill covers the headless CLI only (matching its description).
+Driving the MeerK40t GUI remotely (consoleserver) is a different mode with
+different failure characteristics; the GUI's Outline/trace has unverified
 beam behaviour and is not a substitute for `device frame`.
