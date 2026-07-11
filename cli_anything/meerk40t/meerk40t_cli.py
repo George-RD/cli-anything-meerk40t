@@ -927,7 +927,9 @@ def session_status(ctx: click.Context):
 @click.pass_context
 def repl(ctx: click.Context):
     """Run the interactive REPL."""
-    skin = ReplSkin("meerk40t", version="1.0.0")
+    from cli_anything.meerk40t import __version__
+
+    skin = ReplSkin("meerk40t", version=__version__)
     skin.print_banner()
     pt = skin.create_prompt_session()
     commands = {name: cmd.help or "" for name, cmd in cli.commands.items()}
