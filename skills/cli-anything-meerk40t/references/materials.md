@@ -10,7 +10,8 @@ lens, focus, and material batch. Calibrate on scrap first.*
 - Engrave and cut speed is the feed set per operation (G1). This is what
   burns the material.
 - Set power and speed on every operation before burning: the auto-created
-  operation defaults to full power, which will burn through thin stock.
+  operation defaults to 100% power (`power 1000`), which will burn through
+  thin stock.
 - Tune each key separately: `operations set <id> power <n>` then
   `operations set <id> speed <mm/min>`.
 - UNITS: the CLI's `power` is MeerK40t's 0-1000 scale (the emitted S value
