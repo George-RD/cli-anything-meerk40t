@@ -1,0 +1,30 @@
+[
+  {
+    "name": "offline-design-gcode-export",
+    "prompt": "I have the cli-anything-meerk40t tool installed. Give me the exact commands to create a laser job with a 30x30mm square at position 50,50 and export G-code for my Sculpfun S9. Don't run anything, just write out the commands with a one-line explanation each.",
+    "assertions": [
+      "Uses a machine profile or grbl device flag for the export (--machine sculpfun-s9 or --device grbl)",
+      "Sets power AND speed on the operation before export (mentions the 100% default danger or explicitly sets values)",
+      "Exports gcode via 'export gcode'"
+    ]
+  },
+  {
+    "name": "hardware-bringup-frame",
+    "prompt": "My GRBL diode laser just arrived and is plugged in over USB. Using cli-anything-meerk40t, what is the safe sequence to verify the machine and dry-frame a 40mm square in the middle of the bed before any burning? List the commands in order and the checks between them.",
+    "assertions": [
+      "Detects/verifies the port before anything (device detect / device check)",
+      "Uses a persistent connection (REPL) rather than one-shot commands for the connected sequence",
+      "Frames with explicit rectangle coordinates (device frame X Y W H)",
+      "Includes operator safety (glasses/present) and does NOT suggest physical-home on an endstop-less machine"
+    ]
+  },
+  {
+    "name": "materials-power-speed",
+    "prompt": "What power and speed should I use with cli-anything-meerk40t to engrave 300gsm card stock on a 5W diode laser, and how do I avoid burning through it?",
+    "assertions": [
+      "Recommends calibrating on scrap (power ladder or equivalent stepped test) rather than a single prescriptive number",
+      "Frames any numbers as starting points, not guarantees",
+      "Warns that auto-created operations default to 100% power / says to set power+speed per operation"
+    ]
+  }
+]

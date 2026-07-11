@@ -10,8 +10,15 @@ lens, focus, and material batch. Calibrate on scrap first.*
 - Engrave and cut speed is the feed set per operation (G1). This is what
   burns the material.
 - Set power and speed on every operation before burning: the auto-created
-  operation defaults to 100% power, which will burn through thin stock.
-- Tune with `operations set <id> power <n> speed <mm/min>`.
+  operation defaults to 100% power (`power 1000`), which will burn through
+  thin stock.
+- Tune each key separately: `operations set <id> power <n>` then
+  `operations set <id> speed <n>`.
+- UNITS: `speed` is mm/s (MeerK40t's native unit for vector ops), not
+  mm/min. 1500 mm/min = `speed 25`.
+- UNITS: the CLI's `power` is MeerK40t's 0-1000 scale (the emitted S value
+  when `$30=1000`), NOT a percentage. 15% of full power = `power 150`.
+  Percentages in this file describe intensity relative to full power.
 
 ## Calibration procedure: the power ladder
 
@@ -21,9 +28,10 @@ eyewear, ventilation running, extinguisher or fire blanket within reach.
 Then, on scrap of the actual material:
 
 1. Place 3-5 small squares (20mm) in a row, one power step apart at a fixed
-   feed. On a ~5W diode, 10/15/20% at 1500 mm/min is a conservative starting
-   ladder for that machine class - not a fire-safety guarantee for your
-   material or batch.
+   feed. On a ~5W diode, 10/15/20% (`power 100/150/200` on the 0-1000
+   scale) at 1500 mm/min (`speed 25`) is a conservative starting ladder for
+   that machine class - not a fire-safety guarantee for your material or
+   batch.
 2. Read the result: faintest visible square = marking threshold; pick the
    step that gives the contrast you want. Nothing visible = raise power or
    halve feed and repeat. Charring or flame-licking = stop and back off.
