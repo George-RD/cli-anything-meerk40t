@@ -89,7 +89,7 @@ alive across commands.
 
 Follow in order. Do not skip steps. Each numbered step is a single command; the safety gates stay as prose.
 
-Safety gates: the laser is live once connected. The operator must wear laser-safety glasses, confirm material focus, and keep a fire-safe area before burning. `device frame` and `device check` never fire the beam; only `operations execute` (or the raw console `run`) does.
+Safety gates: the laser is live once connected. The operator must wear laser-safety glasses, confirm material focus, and keep a fire-safe area before burning. `device frame` and `device check` never fire the beam; only the console passthrough (`console spool`, which drives the live spooler) does.
 
 ### 1. Identify the machine - `device detect [--probe]`
 
@@ -151,7 +151,7 @@ Traces the rectangle corners with the laser off so placement can be checked.
 
 `cli-anything-meerk40t device check`
 
-It connects, reads `$$`/`$N`, and reports pass with reasons (bed bounds, power, feed). It does not burn; `check()` does not disconnect, so run it in the REPL if the connection must persist. Before running check, set power and speed on every operation (`operations set 0 power 150`, `operations set 0 speed 25`); never export with defaults, the auto-created op is 100% power.
+It connects, reads `$$`/`$N`, and verifies `$32` (laser mode) and that the `$N` startup blocks are empty. It reports bed travel (`$130`/`$131`) and max S (`$30`) but does NOT verify them against the loaded job, and does not examine job power, feed, or placement. It does not burn; `check()` does not disconnect, so run it in the REPL if the connection must persist. Set every operation's power and speed with `operations set` before burning, and never export with defaults because the auto-created operation is 100% power.
 
 ### 10. Capture the profile (optional) - `device setup --save-profile NAME`
 
@@ -159,13 +159,15 @@ It connects, reads `$$`/`$N`, and reports pass with reasons (bed bounds, power, 
 
 Reads live `$$` settings from the connected GRBL device and writes a user profile (bed size from `$130`/`$131`, firmware in provenance).
 
-### 11. Burn - `operations execute`
+### 11. Burn - console passthrough
 
 Operator wears laser glasses; material placed and focused. Re-frame at the burn location for final placement confirmation. Start conservative (15% power) and increase, never the reverse.
 
-`cli-anything-meerk40t operations execute`
+There is no dedicated burn subcommand. Run the job through the console passthrough, which drives the live spooler directly. Build the default plan and spool it:
 
-(or the raw console `run`).
+`cli-anything-meerk40t console 'plan default copy preprocess blob spool'`
+
+(The meerk40t `spool` command runs a prepared plan on the live device.)
 ## GUI-visible operation (operator watches, agent controls)
 
 Use when the operator wants to see the job on the MeerK40t canvas and own

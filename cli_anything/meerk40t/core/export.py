@@ -3,7 +3,7 @@ import re
 
 from cli_anything.meerk40t.utils.meerk40t_backend import Meerk40tBackend
 
-_MOVE_RE = re.compile(r"^(?:G0|G1|G00|G01)\b", re.IGNORECASE)
+_MOTION_RE = re.compile(r"^G(0|1|00|01)", re.IGNORECASE)
 
 
 def _length_mm(value):
@@ -23,31 +23,42 @@ def _length_mm(value):
 def parse_placement_summary(gcode_text, bed_width, bed_height):
     """Parse emitted G-code for placement bounds and process values.
 
-    Pure function over the generated file text: scans ``G0``/``G1`` motion
-    lines for ``X``/``Y`` bounds, ``S`` (power) and ``F`` (feed) values, and
-    reports the bed dimensions supplied by the caller.
+    Pure function over the generated file text: scans motion lines for ``X``/``Y``
+    bounds, ``S`` (power) and ``F`` (feed) values, and reports the bed dimensions
+    supplied by the caller. GRBL G-code is modal, so bare ``X.. Y..`` continuation
+    lines (no leading ``G`` word) are attributed to the last seen motion mode, and
+    ``M3``/``M4 S..`` lines contribute power values. ``parser_scope`` records the
+    recognised subset so callers do not over-trust the summary.
     """
     x_vals: list[float] = []
     y_vals: list[float] = []
     s_vals: set[int] = set()
     f_vals: set[int] = set()
+    last_motion_mode = None
     for line in gcode_text.splitlines():
         line = line.strip()
-        if not line or not _MOVE_RE.match(line):
+        if not line:
             continue
-        xm = re.search(r"X(-?[\d.]+)", line)
-        ym = re.search(r"Y(-?[\d.]+)", line)
+        m = _MOTION_RE.match(line)
+        if m:
+            last_motion_mode = "G0" if m.group(1) in ("0", "00") else "G1"
+        is_motion = m is not None or (
+            last_motion_mode is not None and re.match(r"[XY]", line) is not None
+        )
+        if is_motion:
+            xm = re.search(r"X(-?[\d.]+)", line)
+            ym = re.search(r"Y(-?[\d.]+)", line)
+            if xm:
+                x_vals.append(float(xm.group(1)))
+            if ym:
+                y_vals.append(float(ym.group(1)))
         sm = re.search(r"S(-?[\d.]+)", line)
-        fm = re.search(r"F(-?[\d.]+)", line)
-        if xm:
-            x_vals.append(float(xm.group(1)))
-        if ym:
-            y_vals.append(float(ym.group(1)))
         if sm:
             try:
                 s_vals.add(int(float(sm.group(1))))
             except ValueError:
                 pass
+        fm = re.search(r"F(-?[\d.]+)", line)
         if fm:
             try:
                 f_vals.add(int(float(fm.group(1))))
@@ -59,6 +70,10 @@ def parse_placement_summary(gcode_text, bed_width, bed_height):
         "bed": {"w": _length_mm(bed_width), "h": _length_mm(bed_height)},
         "s_values": sorted(s_vals),
         "feeds": sorted(f_vals),
+        "parser_scope": (
+            "GRBL G-code: G0/G1 motion, modal X/Y continuation lines, and "
+            "M3/M4 S.. power lines recognised; other modal states ignored"
+        ),
     }
 
 

@@ -27,7 +27,7 @@ DEFAULT_SETTLE = 2.0
 
 _BANNER_RE = re.compile(r"Grbl\s+([0-9][\w.]+)")
 _VER_RE = re.compile(r"\[VER:([^\]]+)\]")
-_STATE_RE = re.compile(r"<([A-Za-z]+)")
+_STATE_RE = re.compile(r"<(Idle|Run|Jog|Alarm|Door|Check|Home|Hold|Sleep)[|>]")
 
 
 def list_serial_ports() -> list[str]:

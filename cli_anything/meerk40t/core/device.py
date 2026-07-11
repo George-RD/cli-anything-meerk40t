@@ -438,16 +438,25 @@ def setup_profile(
     settings = parse_settings(settings_text or "")
     ident = serial_probe.parse_grbl_probe(ident_text or "")
 
-    baud = None
-    try:
-        baud = backend.get("grbl_baud")
-    except Exception:
-        baud = None
-    if baud is None:
-        baud = getattr(dev, "baud", None)
+    # The live GRBL device exposes `baud_rate`; the MeerK40tBackend has no
+    # `get` method, so read the attribute directly (never a dead backend.get()).
+    baud = getattr(dev, "baud_rate", None)
+
 
     bedwidth_mm = settings.get(130)
     bedheight_mm = settings.get(131)
+    # provenance is only "verified" when the live readback actually yielded
+    # settings or firmware identity; an empty reply must not claim trust.
+    read_settings = bool(settings)
+    read_ident = bool(ident.get("firmware") or ident.get("version"))
+    verified = read_settings or read_ident
+    if read_ident:
+        firmware = " ".join(
+            p for p in (ident.get("firmware") or "Grbl", ident.get("version"))
+            if p
+        ).strip() or "Grbl"
+    else:
+        firmware = None
     profile = {
         "name": name,
         "device": "grbl",
@@ -457,11 +466,8 @@ def setup_profile(
         "has_endstops": False,
         "notes": "",
         "provenance": {
-            "firmware": " ".join(
-                p for p in (ident.get("firmware") or "Grbl", ident.get("version"))
-                if p
-            ).strip() or "Grbl",
-            "verified": True,
+            "firmware": firmware,
+            "verified": verified,
         },
     }
     save = save_fn or profiles_mod.save_user_profile
@@ -493,21 +499,98 @@ def _require_live_connection(backend):
     return controller, None
 
 
-def _format_jog(mode: str, x: float, y: float, feed: int) -> str:
-    """Format a GRBL jog command. ``mode`` is ``G91`` (relative) or ``G90``
-    (absolute). Coordinates are machine millimetres (origin front-left, +Y
-    away from the operator)."""
-    return f"$J={mode} X{x} Y{y} F{feed}"
+def _await_jog_ack(backend, controller, line: str, timeout: float = 0.5) -> str:
+    """Write a jog line and capture GRBL's ok/error reply from the recv channel.
+
+    GRBL echoes every processed line on a ``recv-<label>`` channel; we watch it
+    briefly so the caller can report whether the move was acknowledged instead
+    of assuming success. Returns the raw reply (empty when there is no hardware
+    or no reply).
+    """
+    dev = backend.device()
+    if dev is None:
+        return ""
+    label = getattr(dev, "safe_label", None) or "GRBLDevice"
+    try:
+        channel = backend.kernel.channel(f"recv-{label}")
+    except Exception:
+        channel = None
+    captured: list[str] = []
+
+    def _watch(payload, *args, **kwargs):
+        captured.append(str(payload))
+
+    if channel is not None:
+        try:
+            channel.watch(_watch)
+        except Exception:
+            channel = None
+    try:
+        controller.write(line + "\n")
+        if channel is not None and timeout:
+            deadline = time.time() + timeout
+            while time.time() < deadline:
+                if any(
+                    c.lower().startswith("ok") or c.lower().startswith("error")
+                    for c in captured
+                ):
+                    break
+                time.sleep(0.02)
+    finally:
+        if channel is not None:
+            try:
+                channel.unwatch(_watch)
+            except Exception:
+                pass
+    return "\n".join(captured)
+
+
+def _parse_ack(reply: str) -> tuple[bool, "str | None"]:
+    """Return ``(acknowledged, error_text)`` from a raw GRBL jog reply.
+
+    An explicit ``ok`` means the move was accepted; an ``error:`` line means it
+    was rejected (e.g. Alarm state, soft-limit). An empty reply cannot be
+    treated as success.
+    """
+    if not reply:
+        return False, None
+    error_text = None
+    for line in reply.splitlines():
+        lowered = line.lower()
+        if lowered.startswith("error"):
+            error_text = line
+        elif lowered.startswith("ok"):
+            if error_text is None:
+                return True, None
+    return error_text is None, error_text
+
+def _format_jog(mode: str, x: float, y: float, feed: int, machine_coords: bool = False) -> str:
+    """Format a GRBL jog command per the GRBL 1.1 jogging spec.
+
+    ``mode`` is ``G91`` (relative) or ``G90`` (absolute). Coordinates are
+    machine millimetres (origin front-left, +Y away from the operator).
+
+    ``machine_coords=False`` (jog, relative): ``$J=G21G91 ...`` forces
+    millimetres and the relative frame so the current unit mode or a work
+    offset cannot corrupt the move.  ``machine_coords=True`` (goto/frame,
+    absolute): ``$J=G53G21G90 ...`` adds ``G53`` to address the machine
+    coordinate system, never the active work offset.
+    """
+    prefix = "G53G21" if machine_coords else "G21"
+    return f"$J={prefix}{mode} X{x} Y{y} F{feed}"
+
 
 
 def jog(backend, dx: float, dy: float, feed: int = 600) -> dict:
-    """Relative jog via ``$J=G91``. Refuses when no live connection exists."""
+    """Relative jog in machine mm (origin front-left, +Y away). Refuses when
+    no live connection exists. Reports GRBL acknowledgement (ok/error)."""
     controller, err = _require_live_connection(backend)
     if err:
         err["command"] = "jog"
         return err
     line = _format_jog("G91", dx, dy, feed)
-    controller.write(line + "\n")
+    reply = _await_jog_ack(backend, controller, line)
+    acknowledged, error_text = _parse_ack(reply)
     return {
         "jogged": True,
         "mode": "relative",
@@ -515,17 +598,23 @@ def jog(backend, dx: float, dy: float, feed: int = 600) -> dict:
         "dy": dy,
         "feed": feed,
         "command": line,
+        "acknowledged": acknowledged,
+        "response": reply.strip() or None,
+        "error": error_text,
     }
 
 
+
 def goto(backend, x: float, y: float, feed: int = 3000) -> dict:
-    """Absolute jog via ``$J=G90``. Refuses when no live connection exists."""
+    """Absolute jog in machine mm (origin front-left, +Y away). Refuses when
+    no live connection exists. Reports GRBL acknowledgement (ok/error)."""
     controller, err = _require_live_connection(backend)
     if err:
         err["command"] = "goto"
         return err
-    line = _format_jog("G90", x, y, feed)
-    controller.write(line + "\n")
+    line = _format_jog("G90", x, y, feed, machine_coords=True)
+    reply = _await_jog_ack(backend, controller, line)
+    acknowledged, error_text = _parse_ack(reply)
     return {
         "jogged": True,
         "mode": "absolute",
@@ -533,13 +622,17 @@ def goto(backend, x: float, y: float, feed: int = 3000) -> dict:
         "y": y,
         "feed": feed,
         "command": line,
+        "acknowledged": acknowledged,
+        "response": reply.strip() or None,
+        "error": error_text,
     }
+
 
 
 def frame(backend, x: float, y: float, w: float, h: float, feed: int = 1500) -> dict:
     """Dry-frame a rectangle via five absolute jogs (start corner then the
     four edges). Returns the ordered corner list that was traced. Refuses
-    when no live connection exists."""
+    when no live connection exists. Reports per-corner GRBL acknowledgement."""
     controller, err = _require_live_connection(backend)
     if err:
         err["command"] = "frame"
@@ -554,10 +647,24 @@ def frame(backend, x: float, y: float, w: float, h: float, feed: int = 1500) -> 
         (x, y),
     ]
     trace = []
+    acknowledged = True
+    error_text = None
     for cx, cy in corners:
-        line = _format_jog("G90", cx, cy, feed)
-        controller.write(line + "\n")
-        trace.append({"x": cx, "y": cy, "command": line})
+        line = _format_jog("G90", cx, cy, feed, machine_coords=True)
+        reply = _await_jog_ack(backend, controller, line)
+        ok, err_line = _parse_ack(reply)
+        if not ok:
+            acknowledged = False
+            error_text = err_line or error_text
+        trace.append(
+            {
+                "x": cx,
+                "y": cy,
+                "command": line,
+                "acknowledged": ok,
+                "error": err_line,
+            }
+        )
     return {
         "framed": True,
         "x": x,
@@ -566,4 +673,6 @@ def frame(backend, x: float, y: float, w: float, h: float, feed: int = 1500) -> 
         "h": h,
         "feed": feed,
         "corners": trace,
+        "acknowledged": acknowledged,
+        "error": error_text,
     }

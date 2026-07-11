@@ -164,6 +164,29 @@ def mutating(f):
 
 
 # ── Main CLI group ───────────────────────────────────────────────────────────
+def _apply_machine_profile(backend, profile: dict) -> None:
+    """Apply a machine profile's bed dimensions to the active device view.
+
+    Profiles carry ``bedwidth``/``bedheight`` as strings like ``"410mm"``.
+    Assigning them on the active device service (NOT a root-context ``set``,
+    which targets the kernel root context and never reaches the device) and
+    triggering ``realize()`` updates the coordinate view that export placement
+    maths runs against, so plan coordinates and the Y-flip use the real bed.
+    """
+    dev = backend.device()
+    if dev is None:
+        return
+    for attr in ("bedwidth", "bedheight"):
+        value = profile.get(attr)
+        if value:
+            setattr(dev, attr, value)
+    realize = getattr(dev, "realize", None)
+    if callable(realize):
+        try:
+            realize()
+        except Exception:
+            pass
+
 @click.group(cls=MeerkGroup, invoke_without_command=True)
 @click.option("--json/--no-json", "json_mode", default=False, help="Output results as JSON.")
 @click.option("--project", "-p", "project_path", default=None, help="Project SVG file to open.")
@@ -171,7 +194,7 @@ def mutating(f):
 @click.option("--dry-run", is_flag=True, default=False, help="Do not auto-save after mutations.")
 @click.option("--device", "device", type=DEVICE_CHOICES, default="dummy", show_default=True, help="Device driver to activate (dummy, grbl, lihuiyu, moshi, ruida, newly, balor).")
 @click.option("--port", "port", default=None, help="Serial port for the device, e.g. /dev/cu.usbserial-10.")
-@click.option("--machine", "machine", default=None, help="Load a machine profile by name (e.g. sculpfun-s9). Port is still required.")
+@click.option("--machine", "machine", default=None, help="Load a machine profile by name (e.g. sculpfun-s9). The port is only required for serial commands (connect, check, jog, goto, frame, setup); offline commands (export, elements, machine list, project ops) work without one.")
 @click.option("--baud", "baud", default=115200, show_default=True, help="Baud rate for the serial device.")
 @click.pass_context
 def cli(
@@ -213,27 +236,14 @@ def cli(
             device = profile["device"]
         if profile.get("baud"):
             baud = profile["baud"]
-        if not port:
-            _emit(
-                ctx,
-                {
-                    "error": "--machine requires --port (serial ports vary per setup)",
-                    "known": profiles_mod.available_names(),
-                },
-            )
-            sys.stdout = _REAL_STDOUT
-            ctx.exit(1)
 
     backend = Meerk40tBackend(device=device, port=port, baud=baud)
     backend.start()
     ctx.obj["backend"] = backend
 
-    # Apply bed dimensions from the profile after the backend has started.
+    # Apply the profile's bed dimensions to the active device view.
     if profile is not None:
-        if profile.get("bedwidth"):
-            backend.run(f"set bedwidth {profile['bedwidth']}")
-        if profile.get("bedheight"):
-            backend.run(f"set bedheight {profile['bedheight']}")
+        _apply_machine_profile(backend, profile)
     ctx.obj["project_path"] = project_path
 
     if session_path:

@@ -46,7 +46,7 @@ cli-anything-meerk40t [--json] [--device DRIVER] [--port PORT] [--baud N] [--mac
 
 `device status` - port/baud and `connected` state.
 `device detect [--probe]` - list serial ports. `device detect` globs ports only and never opens one; with `--probe` it opens each candidate port and writes a GRBL wake/status/`$I` sequence, reporting firmware/version/state.
-`device check` - preflight the loaded project: it connects, reads `$$`/`$N`, and reports pass with reasons (bed bounds, power, feed). It does not burn; `check()` does not disconnect, so run it in the REPL if the connection must persist.
+`device check` - preflight the GRBL device: it connects, reads `$$`/`$N`, and verifies `$32` (laser mode) and empty `$N` startup blocks. It reports bed travel (`$130`/`$131`) and max S (`$30`) but does NOT verify them, and does not examine job power, feed, or placement. It does not burn; `check()` does not disconnect, so run it in the REPL if the connection must persist.
 `device connect` - open the controller/transport connection (REPL).
 `device disconnect` - close the connection.
 `device home` - home the machine (requires a live connection).
@@ -61,7 +61,7 @@ cli-anything-meerk40t [--json] [--device DRIVER] [--port PORT] [--baud N] [--mac
 ## Machine profiles
 
 `machine list` - show bundled and user profiles with their origin (`bundled` or `user`).
-`--machine PROFILE` - load a profile that sets the driver, baud, and bed size in one step (requires `--port`). An unknown profile emits a `--json` error listing the available names and exits 1.
+`--machine PROFILE` - load a profile that sets the driver, baud, and bed size in one step. A profile is needed for offline commands (export, elements, machine list, project ops); serial commands (connect, check, jog, goto, frame, setup) also need `--port`. An unknown profile emits a `--json` error listing the available names and exits 1.
 User profiles live in `~/.config/cli-anything-meerk40t/profiles/` (override with `CLI_ANYTHING_CONFIG_HOME`); a user profile wins over a bundled one with the same name.
 
 ## Agent guidance
@@ -73,7 +73,7 @@ User profiles live in `~/.config/cli-anything-meerk40t/profiles/` (override with
 
 ## Hardware workflow (follow in order)
 
-Safety gates: the laser is live once connected. The operator must wear laser-safety glasses, confirm material focus, and keep a fire-safe area before burning. `device frame` and `device check` never fire the beam; only `operations execute` (or the raw console `run`) does.
+Safety gates: the laser is live once connected. The operator must wear laser-safety glasses, confirm material focus, and keep a fire-safe area before burning. `device frame` and `device check` never fire the beam; only the console passthrough (`console spool`) does.
 
 1. Identify the machine: `cli-anything-meerk40t device detect [--probe]`. `device detect` globs ports only; `--probe` opens each candidate and reports firmware/version/state. Bed size, endstops, and firmware are not auto-detectable, so ask the operator for the model.
 2. Establish the work origin (safety, not a command): on machines without endstops, power OFF, park the head near front-left, then power on so (0,0) is the corner. Never call `device physical-home`.
@@ -85,7 +85,7 @@ Safety gates: the laser is live once connected. The operator must wear laser-saf
 8. Dry-frame the area: `cli-anything-meerk40t device frame X Y W H [--feed]` (laser off).
 9. Check the job: `cli-anything-meerk40t device check`. It connects and reads `$$`/`$N` automatically; it does not burn. `check()` does not disconnect, so run it in the REPL if the connection must persist. Set every op's power and speed first (the auto-created op is 100% power).
 10. Capture the profile (optional): `cli-anything-meerk40t device setup --save-profile NAME`.
-11. Burn: `cli-anything-meerk40t operations execute` (or the raw console `run`). Start at low power and step up.
+11. Burn: there is no dedicated burn subcommand. Run the job through the console passthrough (`cli-anything-meerk40t console 'plan default copy preprocess blob spool'`), which drives the live spooler. Start at low power and step up.
 
 ## Examples
 

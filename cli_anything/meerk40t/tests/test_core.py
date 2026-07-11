@@ -23,6 +23,8 @@ from cli_anything.meerk40t.utils import serial_probe
 from cli_anything.meerk40t.utils import profiles as profiles_mod
 from cli_anything.meerk40t.utils.meerk40t_backend import Meerk40tBackend
 
+import cli_anything.meerk40t.meerk40t_cli as cli_mod
+
 
 class BackendTestCase(unittest.TestCase):
     """Base class that creates and tears down a fresh backend per test."""
@@ -661,27 +663,50 @@ class TestFrameCornerMath(unittest.TestCase):
         class _Conn:
             connected = True
 
-        class _Controller:
+        class _Channel:
             def __init__(self):
+                self._watchers = []
+
+            def watch(self, cb):
+                self._watchers.append(cb)
+
+            def unwatch(self, cb):
+                if cb in self._watchers:
+                    self._watchers.remove(cb)
+
+            def push(self, payload):
+                for cb in list(self._watchers):
+                    cb(payload)
+
+        class _Controller:
+            def __init__(self, channel):
                 self.connection = _Conn()
                 self.written = []
+                self._channel = channel
 
             def write(self, line):
                 self.written.append(line)
+                self._channel.push("ok")
 
         class _Dev:
             label = "Fake"
+            safe_label = "Fake"
 
-            def __init__(self):
-                self.controller = _Controller()
+            def __init__(self, controller):
+                self.controller = controller
 
             def __str__(self):
                 return "FakeDevice"
 
-        dev = _Dev()
+        channel = _Channel()
+        controller = _Controller(channel)
+        dev = _Dev(controller)
         backend = type("Backend", (), {})()
         backend.device = lambda: dev
-        return backend, dev.controller
+        backend.kernel = type(
+            "Kernel", (), {"channel": staticmethod(lambda name: channel)}
+        )()
+        return backend, controller
 
     def test_frame_traces_five_corners(self):
         backend, controller = self._live_backend()
@@ -698,8 +723,105 @@ class TestFrameCornerMath(unittest.TestCase):
         self.assertEqual(got, expected)
         self.assertEqual(len(controller.written), 5)
         for line in controller.written:
-            self.assertTrue(line.startswith("$J=G90 "))
+            self.assertTrue(line.startswith("$J=G53G21G90 "))
             self.assertIn("F1500", line)
+
+
+class TestJogExactStrings(unittest.TestCase):
+    """P1/P2/P3: jog/goto/frame emit the exact GRBL 1.1 jog words and report
+    GRBL acknowledgement (ok/error) instead of assuming success."""
+
+    def _backend(self, reply="ok", connected=True):
+        class _Conn:
+            connected = True
+
+        class _Channel:
+            def __init__(self):
+                self._watchers = []
+
+            def watch(self, cb):
+                self._watchers.append(cb)
+
+            def unwatch(self, cb):
+                if cb in self._watchers:
+                    self._watchers.remove(cb)
+
+            def push(self, payload):
+                for cb in list(self._watchers):
+                    cb(payload)
+
+        class _Controller:
+            def __init__(self, channel):
+                self.connection = _Conn() if connected else None
+                self.written = []
+                self._channel = channel
+
+            def write(self, line):
+                self.written.append(line)
+                if connected and self._channel is not None and reply:
+                    self._channel.push(reply)
+
+        class _Dev:
+            safe_label = "FakeGRBL"
+            controller = None
+
+            def __init__(self, controller):
+                if connected:
+                    self.controller = controller
+
+            def __str__(self):
+                return "GRBLDevice"
+
+        channel = _Channel()
+        controller = _Controller(channel)
+        dev = _Dev(controller)
+        backend = type("Backend", (), {})()
+        backend.device = lambda: dev
+        backend.kernel = type(
+            "Kernel", (), {"channel": staticmethod(lambda name: channel)}
+        )()
+        return backend, controller
+
+    def test_jog_emits_relative_word(self):
+        backend, controller = self._backend()
+        res = device_mod.jog(backend, 10.0, 10.0, feed=600)
+        self.assertTrue(res["jogged"])
+        self.assertEqual(controller.written[0], "$J=G21G91 X10.0 Y10.0 F600\n")
+        self.assertEqual(res["command"], "$J=G21G91 X10.0 Y10.0 F600")
+        self.assertTrue(res["acknowledged"])
+        self.assertEqual(res["response"], "ok")
+        self.assertIsNone(res["error"])
+
+    def test_goto_emits_absolute_word(self):
+        backend, controller = self._backend()
+        res = device_mod.goto(backend, 0.0, 0.0, feed=3000)
+        self.assertTrue(res["jogged"])
+        self.assertEqual(controller.written[0], "$J=G53G21G90 X0.0 Y0.0 F3000\n")
+        self.assertEqual(res["command"], "$J=G53G21G90 X0.0 Y0.0 F3000")
+        self.assertTrue(res["acknowledged"])
+
+    def test_frame_emits_absolute_words(self):
+        backend, controller = self._backend()
+        res = device_mod.frame(backend, 10.0, 20.0, 30.0, 40.0, feed=1500)
+        self.assertTrue(res["framed"])
+        self.assertEqual(len(controller.written), 5)
+        for line in controller.written:
+            self.assertTrue(line.startswith("$J=G53G21G90 "))
+            self.assertIn("F1500", line)
+
+    def test_jog_reports_error_response(self):
+        backend, controller = self._backend(reply="error:9")
+        res = device_mod.jog(backend, 10.0, 10.0, feed=600)
+        self.assertFalse(res["acknowledged"])
+        self.assertEqual(res["error"], "error:9")
+        self.assertEqual(res["response"], "error:9")
+
+    def test_jog_unacknowledged_without_reply(self):
+        # No recv reply (e.g. no hardware): must not claim success.
+        backend, controller = self._backend(reply=None)
+        res = device_mod.jog(backend, 10.0, 10.0, feed=600)
+        self.assertFalse(res["acknowledged"])
+        self.assertIsNone(res["response"])
 
 
 class TestProfileOverlay(unittest.TestCase):
@@ -770,7 +892,7 @@ class TestSetupProfileWrites(unittest.TestCase):
 
         class _Dev:
             label = "GRBL"
-            baud = 115200
+            baud_rate = 115200
 
             def __init__(self):
                 self.controller = _Controller()
@@ -781,7 +903,6 @@ class TestSetupProfileWrites(unittest.TestCase):
         dev = _Dev()
         backend = type("Backend", (), {})()
         backend.device = lambda: dev
-        backend.get = lambda key, default=None: default
         return backend
 
     def test_setup_writes_correct_json(self):
@@ -807,6 +928,19 @@ class TestSetupProfileWrites(unittest.TestCase):
         self.assertEqual(data["bedheight"], "200.000mm")
         self.assertEqual(data["provenance"]["firmware"], "Grbl 1.1f")
         self.assertTrue(data["provenance"]["verified"])
+    def test_setup_unverified_when_no_readback(self):
+        backend = self._grbl_backend()
+        res = device_mod.setup_profile(
+            backend,
+            "empty",
+            settings_text="",
+            ident_text="",
+            config_home=self.tmp,
+        )
+        self.assertTrue(res["saved"])
+        provenance = res["profile"]["provenance"]
+        self.assertFalse(provenance["verified"])
+        self.assertIsNone(provenance["firmware"])
     def test_setup_writes_via_config_home_env(self):
         # Contract item 2: profile written under a tmpdir pointed to by
         # CLI_ANYTHING_CONFIG_HOME, with no config_home argument passed.
@@ -866,6 +1000,36 @@ class TestExportGuard(unittest.TestCase):
         self.assertEqual(summary["feeds"], [1000])
 
 
+class TestMachineBedApplication(unittest.TestCase):
+    """P1 #1: a --machine profile bed must reach the device view and thus the
+    export placement summary."""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp(prefix="mk_bed_")
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def test_apply_machine_profile_reaches_export_placement(self):
+        backend = Meerk40tBackend(device="grbl", port=None, baud=115200)
+        backend.start()
+        try:
+            cli_mod._apply_machine_profile(
+                backend, {"bedwidth": "410mm", "bedheight": "400mm"}
+            )
+            dev = backend.device()
+            self.assertEqual(getattr(dev, "bedwidth", None), "410mm")
+            self.assertEqual(getattr(dev, "bedheight", None), "400mm")
+            operations.add_operation(backend, "cut")
+            elements.add_rect(backend, 0, 0, 10, 10)
+            path = os.path.join(self.tmp, "job.gcode")
+            res = export.export_gcode(backend, path, allow_full_power=True)
+            self.assertNotIn("error", res, res)
+            self.assertEqual(res["placement"]["bed"], {"w": 410.0, "h": 400.0})
+        finally:
+            backend.shutdown()
+
+
 class TestCliMachineProfile(unittest.TestCase):
     """CLI-level machine-profile wiring (unknown name -> JSON error, exit 1)."""
 
@@ -902,6 +1066,25 @@ class TestCliMachineProfile(unittest.TestCase):
         self.assertIn("sculpfun-s9", names)
         origins = {p["name"]: p["origin"] for p in data["profiles"]}
         self.assertEqual(origins["sculpfun-s9"], "bundled")
+
+    def test_cli_offline_command_works_with_machine_alone(self):
+        # P2 #4: offline commands work with --machine and no --port.
+        result, out = self._run_json(["--machine", "sculpfun-s9", "machine", "list"])
+        self.assertEqual(result.exit_code, 0, result.output)
+        data = json.loads(out)
+        names = [p["name"] for p in data["profiles"]]
+        self.assertIn("sculpfun-s9", names)
+
+    def test_cli_serial_command_no_port_gate_defers_to_connect(self):
+        # P2 #4: a serial command without --port is no longer blocked by a
+        # global gate; it reaches the device layer and reports the real
+        # connection error instead of "--machine requires --port".
+        result, out = self._run_json(
+            ["--machine", "sculpfun-s9", "device", "jog", "10", "10"]
+        )
+        data = json.loads(out)
+        self.assertIn("error", data)
+        self.assertNotIn("--machine requires --port", out)
 
 if __name__ == "__main__":
     unittest.main()

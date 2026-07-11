@@ -70,8 +70,11 @@ cli-anything-meerk40t --device grbl --port /dev/cu.usbserial-10 --baud 115200
 
 Supported drivers: `dummy` (default, no hardware), `grbl`, `lihuiyu`,
 `moshi`, `ruida`, `newly`, `balor`. Load a bundled or user machine
-profile with `--machine PROFILE` (requires `--port`); it sets the driver,
-baud, and bed size. List profiles with `machine list`. Start a REPL so the
+profile with `--machine PROFILE`; it sets the driver, baud, and bed size. The
+port is only needed for serial commands (connect, check, jog, goto, frame,
+setup); offline commands (export, elements, machine list, project ops) work
+without one.
+List profiles with `machine list`. Start a REPL so the
 connection to the device controller persists across commands:
 
 ```bash
