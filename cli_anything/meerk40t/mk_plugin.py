@@ -38,6 +38,9 @@ Design notes
 from __future__ import annotations
 
 import inspect
+import re
+import textwrap
+
 from meerk40t.kernel import _
 
 # Upstream pull request that introduces these fixes permanently.
@@ -174,19 +177,38 @@ def _transform_console_server_source(src):
 
 
 def _transform_web_server_send_command(src):
-    """Back-fill the handover fix into a ``WebServer.send_command`` source."""
+    """Back-fill the handover fix into a ``WebServer.send_command`` source.
+
+    Indentation-agnostic: matches the stale handover dispatch block at any
+    nesting depth and preserves the original indentation, so the transform
+    is idempotent and the caller can dedent for compile().
+    """
     if 'lookup("gui/handover")' in src:
         return src
-    old = '        if self.handover is None:\n            self.context(f"{command}\\n")'
-    new = (
-        '        if self.handover is None:\n'
-        '            self.handover = self.context.root.lookup("gui/handover")\n'
-        '            self.context(f"{command}\\n")'
+    pattern = re.compile(
+        r"^(?P<i>[ ]*)if self\.handover is None:\n"
+        r"(?P=i)    self\.context\(f\"\{command\}\\n\"\)\n"
+        r"(?P=i)else:\n"
+        r"(?P=i)    self\.handover\(command\)",
+        re.M,
     )
-    if old in src:
-        return src.replace(old, new)
-    return src
 
+    def repl(match):
+        i = match.group("i")
+        return (
+            f"{i}if self.handover is None:\n"
+            f"{i}    # Resolve at execution time: the gui (and its thread\n"
+            f"{i}    # handover) may not exist yet when the server starts.\n"
+            f"{i}    # Back-fills meerk40t/meerk40t#3249.\n"
+            f'{i}    self.handover = self.context.root.lookup("gui/handover")\n'
+            f"{i}if self.handover is None:\n"
+            f'{i}    self.context(f"{{command}}\\n")\n'
+            f"{i}else:\n"
+            f"{i}    self.handover(command)"
+        )
+
+    fixed, count = pattern.subn(repl, src)
+    return fixed if count else src
 
 def _rebind_module_function(module, attr, transform, channel, status, name):
     """Re-execute a module-level function with a transformed source.
@@ -233,8 +255,11 @@ def _patch_web_server(ws_module, channel, status, name):
     if fixed == src:
         setattr(ws_module, applied_marker, True)
         return False
-    namespace = {}
-    exec(compile(fixed, "<web_server.send_command>", "exec"), namespace)
+    namespace = dict(vars(ws_module))
+    exec(
+        compile(textwrap.dedent(fixed), "<web_server.send_command>", "exec"),
+        namespace,
+    )
     web_server.send_command = namespace["send_command"]
     setattr(ws_module, applied_marker, True)
     return True
@@ -366,7 +391,10 @@ def _patch_set_typed(kernel, channel):
             status[name] = "skipped-already-fixed"
             return
         _register_fixed_set(kernel)
+        # The fixed set command carries both capabilities; record both so
+        # the status reflects what was actually installed.
         status[name] = "applied"
+        status[PATCH_FEEDBACK] = "applied"
     except Exception as exc:
         status[name] = "failed"
         _emit_skip(channel, name, exc)
