@@ -21,7 +21,7 @@ setup(
     long_description_content_type="text/plain",
     author="George-RD",
     license="MIT",
-    python_requires=">=3.8",
+    python_requires=">=3.10",
     packages=find_namespace_packages(include=["cli_anything.*"]),
     install_requires=[
         "click>=8.0",
