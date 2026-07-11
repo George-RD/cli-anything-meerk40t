@@ -142,8 +142,9 @@ adds 13 E2E tests (121 total).
 ## Running the tests
 
 ```bash
-/tmp/mk_venv/bin/python -m unittest cli_anything.meerk40t.tests.test_core -v
-/tmp/mk_venv/bin/python -m unittest cli_anything.meerk40t.tests.test_full_e2e -v
+.venv/bin/python -m unittest cli_anything.meerk40t.tests.test_core -v
+.venv/bin/python -m unittest cli_anything.meerk40t.tests.test_mk_plugin -v
+.venv/bin/python -m unittest cli_anything.meerk40t.tests.test_full_e2e -v
 ```
 
 
