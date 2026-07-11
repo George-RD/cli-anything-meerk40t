@@ -270,28 +270,53 @@ glue_x0 = CHIM_X0 + 4 * CHIM_FACE_W
 glue_x1 = glue_x0 + CHIM_TAB_W
 glue_chamfer = 2.0
 
+# Perimeter traversal: full top edge left-to-right, glue tab, then the
+# bottom profile right-to-left (F4 notch, F3 diagonal with tongue, F2
+# notch, F1 diagonal with tongue), then the left edge back up. Tongues
+# protrude 3 mm along the OUTWARD NORMAL of their diagonal edge so the
+# tongue is never clipped by its own edge.
+_slope_len = math.hypot(CHIM_FACE_W, CHIM_SLOPE_OFFSET)
+# F3 diagonal runs (192,200)->(178,215.75); outward normal points down-right
+_n3 = (CHIM_SLOPE_OFFSET / _slope_len, CHIM_FACE_W / _slope_len)
+# F1 diagonal runs (164,215.75)->(150,200); outward normal points down-left
+_n1 = (-CHIM_SLOPE_OFFSET / _slope_len, CHIM_FACE_W / _slope_len)
+
+
+def _f1_y(x):
+    return (CHIM_TOP_Y + CHIM_HEIGHT) + (x - CHIM_X0) * PITCH_TAN
+
+
+def _f3_y(x):
+    return (CHIM_TOP_Y + CHIM_HEIGHT) + ((CHIM_X0 + 3 * CHIM_FACE_W) - x) * PITCH_TAN
+
+
+_t3a = (F3_tongue_cx + TONGUE_WIDTH / 2.0, _f3_y(F3_tongue_cx + TONGUE_WIDTH / 2.0))
+_t3b = (F3_tongue_cx - TONGUE_WIDTH / 2.0, _f3_y(F3_tongue_cx - TONGUE_WIDTH / 2.0))
+_t1a = (F1_tongue_cx + TONGUE_WIDTH / 2.0, _f1_y(F1_tongue_cx + TONGUE_WIDTH / 2.0))
+_t1b = (F1_tongue_cx - TONGUE_WIDTH / 2.0, _f1_y(F1_tongue_cx - TONGUE_WIDTH / 2.0))
+
 chimney_perim_points = [
     F1_top_left,
-    F1_top_right,
-    (F1_tongue_cx - TONGUE_WIDTH / 2.0, F1_tongue_top_y),
-    (F1_tongue_cx - TONGUE_WIDTH / 2.0, F1_tongue_bottom_y),
-    (F1_tongue_cx + TONGUE_WIDTH / 2.0, F1_tongue_bottom_y),
-    (F1_tongue_cx + TONGUE_WIDTH / 2.0, F1_tongue_top_y),
-    F1_bottom_right,
-    (F2_notch_cx, F2_notch_y),
-    F2_bottom_right,
-    (F3_tongue_cx - TONGUE_WIDTH / 2.0, F3_tongue_top_y),
-    (F3_tongue_cx - TONGUE_WIDTH / 2.0, F3_tongue_bottom_y),
-    (F3_tongue_cx + TONGUE_WIDTH / 2.0, F3_tongue_bottom_y),
-    (F3_tongue_cx + TONGUE_WIDTH / 2.0, F3_tongue_top_y),
-    F3_bottom_right,
-    (F4_notch_cx, F4_notch_y),
+    (glue_x0 + glue_chamfer, CHIM_TOP_Y),                     # top edge
+    (glue_x1, CHIM_TOP_Y + glue_chamfer),                     # tab chamfer
+    (glue_x1, F4_bottom_right[1] - glue_chamfer),             # tab right edge
+    (glue_x0 + glue_chamfer, F4_bottom_right[1]),             # tab chamfer
     F4_bottom_right,
-    (glue_x0 + glue_chamfer, F4_bottom_right[1]),
-    (glue_x1, F4_bottom_right[1] - glue_chamfer),
-    (glue_x1, CHIM_TOP_Y + glue_chamfer),
-    (glue_x0 + glue_chamfer, CHIM_TOP_Y),
-    F1_top_left,
+    (F4_notch_cx, F4_notch_y),                                # F4 V-notch
+    F4_bottom_left,
+    _t3a,                                                     # F3 diagonal
+    (_t3a[0] + TONGUE_DEPTH * _n3[0], _t3a[1] + TONGUE_DEPTH * _n3[1]),
+    (_t3b[0] + TONGUE_DEPTH * _n3[0], _t3b[1] + TONGUE_DEPTH * _n3[1]),
+    _t3b,
+    F3_bottom_left,
+    (F2_notch_cx, F2_notch_y),                                # F2 V-notch
+    F2_bottom_left,
+    _t1a,                                                     # F1 diagonal
+    (_t1a[0] + TONGUE_DEPTH * _n1[0], _t1a[1] + TONGUE_DEPTH * _n1[1]),
+    (_t1b[0] + TONGUE_DEPTH * _n1[0], _t1b[1] + TONGUE_DEPTH * _n1[1]),
+    _t1b,
+    F1_bottom_left,
+    F1_top_left,                                              # left edge up
 ]
 cut_elements.append(("chimney_perim", points_to_path(chimney_perim_points)))
 
@@ -346,7 +371,8 @@ for cx in (GABLE_WIN_CX_A, GABLE_WIN_CX_B):
 
 # Door planks and handle
 for x in [DOOR_X0 + 6.0, DOOR_X0 + 12.0, DOOR_X0 + 18.0, DOOR_X0 + 24.0]:
-    etch_elements.append((f"door_plank_{x:.1f}", f"M {fmt(x)} {fmt(DOOR_Y0)} L {fmt(x)} {fmt(DOOR_Y1)}"))
+    # inset 2 mm from the door's top cut and bottom hinge score
+    etch_elements.append((f"door_plank_{x:.1f}", f"M {fmt(x)} {fmt(DOOR_Y0 + 2.0)} L {fmt(x)} {fmt(DOOR_Y1 - 2.0)}"))
 etch_elements.append(("door_handle", f"M {fmt(DOOR_CX - 1.5)} {fmt(DOOR_Y1 - 20.0)} A 1.5 1.5 0 1 1 {fmt(DOOR_CX + 1.5)} {fmt(DOOR_Y1 - 20.0)} A 1.5 1.5 0 1 1 {fmt(DOOR_CX - 1.5)} {fmt(DOOR_Y1 - 20.0)} Z"))
 
 # Brick courses on wall bodies, avoiding apertures and edges
@@ -382,7 +408,8 @@ def add_bricks(wall_left, wall_right, wall_top, wall_bottom, avoid_rects):
                 if rx0 <= jx <= rx1 and not (y + 7.0 <= ry0 or y >= ry1):
                     skip = True
                     break
-            if not skip:
+            # keep the joint 2 mm above the wall baseline fold/cut
+            if not skip and y + 7.0 <= wall_bottom - 2.0:
                 etch_elements.append((f"brick_v_{wall_left:.0f}_{y:.1f}_{jx:.1f}", f"M {fmt(jx)} {fmt(y)} L {fmt(jx)} {fmt(y + 7.0)}"))
             jx += 16.0
         y += 7.0
@@ -467,7 +494,8 @@ while y < ROOF_Y1 - ETCH_MARGIN:
             sx0 - ETCH_MARGIN <= x <= sx1 + ETCH_MARGIN and
             not (yb <= sy0 - ETCH_MARGIN or y >= sy1 + ETCH_MARGIN)
             for sx0, sy0, sx1, sy1 in ROOF_SLOTS)
-        if yb <= ROOF_Y1 - ETCH_MARGIN and not in_slot:
+        crosses_ridge = y < ROOF_RIDGE_Y < yb
+        if yb <= ROOF_Y1 - ETCH_MARGIN and not in_slot and not crosses_ridge:
             etch_elements.append((f"shingle_v_{y:.1f}_{x:.1f}", f"M {fmt(x)} {fmt(y)} L {fmt(x)} {fmt(yb)}"))
         x += 8.0
     y += 8.0
@@ -478,16 +506,47 @@ for x in (ROOF_X0 + 5.0, ROOF_X1 - 5.0):
     etch_elements.append((f"roof_tick_top_{x:.1f}", f"M {fmt(x)} {fmt(ROOF_RIDGE_Y - 2.0)} L {fmt(x)} {fmt(ROOF_RIDGE_Y + 2.0)}"))
     etch_elements.append((f"roof_tick_bottom_{x:.1f}", f"M {fmt(x)} {fmt(ROOF_Y1 - 5.0)} L {fmt(x)} {fmt(ROOF_Y1)}"))
 
-# Chimney brick etch (safe central region, clear of tongues and V-notches)
+# Chimney brick etch, clipped 2 mm inside the LOCAL bottom profile.
+# The bottom is not flat: F1/F3 have rising diagonals and F2/F4 have
+# V-notches, so each course must be split per face.
+def chim_bottom(x):
+    """Material bottom edge y at net x inside the chimney strip."""
+    if x <= CHIM_X0 + CHIM_FACE_W:                       # F1 diagonal
+        return _f1_y(x)
+    if x <= CHIM_X0 + 2 * CHIM_FACE_W:                   # F2 V-notch
+        return F2_notch_y + abs(x - F2_notch_cx) * PITCH_TAN
+    if x <= CHIM_X0 + 3 * CHIM_FACE_W:                   # F3 diagonal
+        return _f3_y(x)
+    return F4_notch_y + abs(x - F4_notch_cx) * PITCH_TAN  # F4 V-notch
+
+
+def chim_runs(y_need, x0, x1, step=0.25):
+    """x-intervals where the brick feature fits: chim_bottom(x) >= y_need."""
+    runs, start, x = [], None, x0
+    while x <= x1 + 1e-9:
+        ok = chim_bottom(x) >= y_need
+        if ok and start is None:
+            start = x
+        if (not ok or x >= x1) and start is not None:
+            end = x if not ok else x1
+            if end - start > 2.0:
+                runs.append((start, end))
+            start = None
+        x += step
+    return runs
+
+
+CHIM_ETCH_X0 = CHIM_X0 + 3.0
+CHIM_ETCH_X1 = CHIM_X0 + 4 * CHIM_FACE_W - 3.0
 for y in (177.0, 184.0, 191.0, 198.0):
-    etch_elements.append((f"chim_brick_h_{y:.1f}", f"M {fmt(CHIM_X0 + 3.0)} {fmt(y)} L {fmt(CHIM_X0 + 4 * CHIM_FACE_W - 3.0)} {fmt(y)}"))
-# No vertical joints below the 191 mm course: a 198+7 mm tick would poke
-# past the shortest face bottoms (y = 200 on F4 and at F1's left edge).
+    for s0, s1 in chim_runs(y + 2.0, CHIM_ETCH_X0, CHIM_ETCH_X1):
+        etch_elements.append((f"chim_brick_h_{y:.1f}_{s0:.1f}", f"M {fmt(s0)} {fmt(y)} L {fmt(s1)} {fmt(y)}"))
 for row, y in enumerate((177.0, 184.0, 191.0)):
     offset = 0.0 if row % 2 == 0 else 8.0
-    x = CHIM_X0 + 3.0 + offset
-    while x < CHIM_X0 + 4 * CHIM_FACE_W - 3.0:
-        etch_elements.append((f"chim_brick_v_{y:.1f}_{x:.1f}", f"M {fmt(x)} {fmt(y)} L {fmt(x)} {fmt(y + 7.0)}"))
+    x = CHIM_ETCH_X0 + offset
+    while x < CHIM_ETCH_X1:
+        if chim_bottom(x) >= y + 9.0:   # joint bottom 2 mm above local edge
+            etch_elements.append((f"chim_brick_v_{y:.1f}_{x:.1f}", f"M {fmt(x)} {fmt(y)} L {fmt(x)} {fmt(y + 7.0)}"))
         x += 16.0
 
 # --- SVG emission ---------------------------------------------------------
@@ -814,37 +873,42 @@ def segments_coincide(s1, s2):
 
 
 def extract_segments(el):
-    """Extract line segments from a parsed cut element."""
+    """Extract line segments from a parsed element, including Z closures."""
     tag = el.tag
     if tag.endswith("path"):
         d = el.get("d")
         import re
         tokens = re.findall(r"[MLAZ]|-?\d+\.?\d*", d)
+        segs = []
         pts = []
+        start = None
         i = 0
         while i < len(tokens):
             cmd = tokens[i]
             if cmd == "M":
-                pts.append((float(tokens[i + 1]), float(tokens[i + 2])))
+                if len(pts) > 1:
+                    segs.extend((pts[j], pts[j + 1]) for j in range(len(pts) - 1))
+                pts = [(float(tokens[i + 1]), float(tokens[i + 2]))]
+                start = pts[0]
                 i += 3
             elif cmd == "L":
                 pts.append((float(tokens[i + 1]), float(tokens[i + 2])))
                 i += 3
             elif cmd == "A":
-                # approximate arc as a straight chord
-                i += 1
-                rx = float(tokens[i]); ry = float(tokens[i + 1])
-                i += 5  # skip xrot, large, sweep
-                ex = float(tokens[i]); ey = float(tokens[i + 1])
-                i += 2
+                # approximate arc by its endpoint chord
+                ex = float(tokens[i + 6]); ey = float(tokens[i + 7])
                 pts.append((ex, ey))
+                i += 8
             elif cmd == "Z":
+                # Z closes the subpath: the closing segment is REAL cut
+                # geometry. Ignoring it hid a 14 mm double-cut once.
+                if start is not None and pts and pts[-1] != start:
+                    pts.append(start)
                 i += 1
             else:
                 i += 1
-        segs = []
-        for j in range(len(pts) - 1):
-            segs.append((pts[j], pts[j + 1]))
+        if len(pts) > 1:
+            segs.extend((pts[j], pts[j + 1]) for j in range(len(pts) - 1))
         return segs
     if tag.endswith("line"):
         return [((float(el.get("x1")), float(el.get("y1"))),
@@ -861,6 +925,59 @@ for i in range(len(segments)):
     for j in range(i + 1, len(segments)):
         if segments_coincide(segments[i], segments[j]):
             fail(f"coincident cut segments {segments[i]} and {segments[j]}")
+
+
+# (f) No etch/score segment may cross a cut segment transversally.
+# Endpoint touches (T-junctions like score ends on the perimeter) are fine.
+def _cross(a, b, c, d):
+    def orient(p, q, r):
+        return (q[0] - p[0]) * (r[1] - p[1]) - (q[1] - p[1]) * (r[0] - p[0])
+    o1, o2 = orient(a, b, c), orient(a, b, d)
+    o3, o4 = orient(c, d, a), orient(c, d, b)
+    return o1 * o2 < -EPS and o3 * o4 < -EPS
+
+
+def _endpoint_touch(s1, s2, tol=1e-6):
+    return any(abs(p[0] - q[0]) < tol and abs(p[1] - q[1]) < tol
+               for p in s1 for q in s2)
+
+
+for gid in ("etch", "score"):
+    g_el = [g for g in groups if g.get("id") == gid][0]
+    for el in g_el:
+        for s1 in extract_segments(el):
+            for s2 in segments:
+                if _endpoint_touch(s1, s2):
+                    continue
+                if _cross(s1[0], s1[1], s2[0], s2[1]):
+                    fail(f"{gid} element {el.get('id')} crosses cut segment {s2}")
+
+# (g) Every closed cut path must be a simple polygon: no vertex may lie in
+# the interior of a non-incident segment (catches mis-ordered point lists).
+for el in cut_g2:
+    segs = extract_segments(el)
+    if len(segs) < 3:
+        continue
+    verts = [s[0] for s in segs]
+    for v in verts:
+        for (p, q) in segs:
+            if _endpoint_touch((v, v), (p, q)):
+                continue
+            # distance from v to segment pq
+            px, py = q[0] - p[0], q[1] - p[1]
+            L2 = px * px + py * py
+            if L2 < EPS:
+                continue
+            t = max(0.0, min(1.0, ((v[0] - p[0]) * px + (v[1] - p[1]) * py) / L2))
+            dx, dy = v[0] - (p[0] + t * px), v[1] - (p[1] + t * py)
+            if dx * dx + dy * dy < 1e-6:
+                fail(f"cut path {el.get('id')} self-touches: vertex {v} on segment {(p, q)}")
+    for i in range(len(segs)):
+        for j in range(i + 2, len(segs)):
+            if _endpoint_touch(segs[i], segs[j]):
+                continue
+            if _cross(segs[i][0], segs[i][1], segs[j][0], segs[j][1]):
+                fail(f"cut path {el.get('id')} self-intersects: {segs[i]} x {segs[j]}")
 
 # --- summary ---------------------------------------------------------------
 print("OK: house_a3.svg generated and validated")
