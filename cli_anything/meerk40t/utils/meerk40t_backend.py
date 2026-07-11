@@ -25,6 +25,30 @@ def _strip_ansi(text: str) -> str:
 def _strip_ts(text: str) -> str:
     """Strip the leading timestamp prefix the console channel adds."""
     return _TS_RE.sub("", text)
+# Map the user-facing CLI device choice to the provider name MeerK40t
+# actually registers for `service device start -i <provider>`. Verified against
+# the installed meerk40t package (meerk40t/<driver>/plugin.py):
+#   lihuiyu  -> lhystudios   (provider/device/lhystudios -> LihuiyuDevice)
+#   moshi    -> moshi        (provider/device/moshi -> MoshiDevice)
+#   ruida    -> ruida         (provider/device/ruida -> RuidaDevice)
+#   newly    -> newly         (provider/device/newly -> NewlyDevice)
+#   balor    -> balor         (provider/device/balor -> BalorDevice)
+#   grbl     -> grbl          (provider/device/grbl -> GRBLDevice)
+#   dummy    -> dummy        (handled separately via `service device start dummy 0`)
+# Only `lihuiyu` differs from its registered provider name.
+_DEVICE_PROVIDER_ALIASES = {
+    "lihuiyu": "lhystudios",
+}
+
+
+def _device_provider_name(device_type: str) -> str:
+    """Resolve a user-facing CLI device choice to its MeerK40t provider name.
+
+    `service device start -i <provider>` needs the provider name MeerK40t
+    registered, not the friendly CLI choice. Unknown values pass through
+    unchanged so future providers work without code changes here.
+    """
+    return _DEVICE_PROVIDER_ALIASES.get(device_type, device_type)
 
 
 class Meerk40tBackend:
@@ -38,9 +62,19 @@ class Meerk40tBackend:
     this raises ``RuntimeError`` with install instructions.
     """
 
-    def __init__(self, profile: str = "MeerK40t_CLI", ignore_settings: bool = True):
+    def __init__(
+        self,
+        profile: str = "MeerK40t_CLI",
+        ignore_settings: bool = True,
+        device: str = "dummy",
+        port: Optional[str] = None,
+        baud: int = 115200,
+    ):
         self.profile = profile
         self.ignore_settings = ignore_settings
+        self.device_type = device
+        self.port = port
+        self.baud = baud
         self._kernel: Optional[Any] = None
         self._lock = threading.RLock()
         self._captured: list[str] = []
@@ -104,13 +138,60 @@ class Meerk40tBackend:
 
             kernel(partial=True)
             kernel.console("channel print console\n")
-            kernel.console("service device start dummy 0\n")
+
+            if self.device_type and self.device_type != "dummy":
+                provider = _device_provider_name(self.device_type)
+                kernel.console(f"service device start -i {provider} 0\n")
+                dev = kernel.device
+                try:
+                    self._apply_serial_config(dev)
+                except Exception as exc:
+                    # Roll back the partially booted kernel so the backend
+                    # remains restartable after a bad port/baud value.
+                    try:
+                        kernel()
+                    except Exception as teardown_exc:
+                        raise RuntimeError(
+                            f"serial config failed and kernel teardown also failed: {teardown_exc}"
+                        ) from exc
+                    raise
+            else:
+                kernel.console("service device start dummy 0\n")
+            # Register the base-device console commands (device, devinfo, activate,
+            # ...). This must run AFTER a device is active: basedevice's boot
+            # lifecycle auto-starts its `preferred_device` (lhystudios) when
+            # `kernel.device` is still unset, which would hijack the default.
+            from meerk40t.device import basedevice
+            basedevice.plugin(kernel, "boot")
 
             # Capture console channel output.
             kernel._console_channel.watch(self._on_channel)
             self._watcher_installed = True
 
             self._kernel = kernel
+
+
+    def _apply_serial_config(self, dev) -> None:
+        """Apply configured serial port/baud to the active device.
+
+        A setter failure (e.g. an invalid port value) is surfaced as a
+        RuntimeError rather than silently swallowed, so the operator learns
+        the device did not accept the configuration.
+        """
+        if self.port is not None and hasattr(dev, "serial_port"):
+            try:
+                dev.serial_port = self.port
+            except Exception as exc:
+                raise RuntimeError(
+                    f"failed to set serial_port={self.port!r}: {exc}"
+                ) from exc
+        if self.baud is not None and hasattr(dev, "baud_rate"):
+            try:
+                dev.baud_rate = self.baud
+            except Exception as exc:
+                raise RuntimeError(
+                    f"failed to set baud_rate={self.baud!r}: {exc}"
+                ) from exc
 
     def shutdown(self) -> None:
         """Tear down the kernel."""

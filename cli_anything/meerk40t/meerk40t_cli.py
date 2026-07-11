@@ -18,6 +18,12 @@ from cli_anything.meerk40t.core import project as project_mod
 from cli_anything.meerk40t.core import session as session_mod
 from cli_anything.meerk40t.utils.meerk40t_backend import Meerk40tBackend
 from cli_anything.meerk40t.utils.repl_skin import ReplSkin
+# Driver choices for --device. Extracted to a module-level var so the
+# skill_generator regex (which chokes on nested parens in decorators) does
+# not trip over click.Choice([...]).
+DEVICE_CHOICES = click.Choice(
+    ["dummy", "grbl", "lihuiyu", "moshi", "ruida", "newly", "balor"]
+)
 
 
 # Real stdout handle used for all user-facing output (kernel noise is suppressed).
@@ -157,19 +163,29 @@ def mutating(f):
 
 
 # ── Main CLI group ───────────────────────────────────────────────────────────
-
-
 @click.group(cls=MeerkGroup, invoke_without_command=True)
 @click.option("--json/--no-json", "json_mode", default=False, help="Output results as JSON.")
 @click.option("--project", "-p", "project_path", default=None, help="Project SVG file to open.")
 @click.option("--session", "-s", "session_path", default=None, help="Session JSON file.")
 @click.option("--dry-run", is_flag=True, default=False, help="Do not auto-save after mutations.")
+@click.option("--device", "device", type=DEVICE_CHOICES, default="dummy", show_default=True, help="Device driver to activate (dummy, grbl, lihuiyu, moshi, ruida, newly, balor).")
+@click.option("--port", "port", default=None, help="Serial port for the device, e.g. /dev/cu.usbserial-10.")
+@click.option("--baud", "baud", default=115200, show_default=True, help="Baud rate for the serial device.")
 @click.pass_context
-def cli(ctx: click.Context, json_mode: bool, project_path: str | None, session_path: str | None, dry_run: bool):
-    """cli-anything-meerk40t — agent CLI for MeerK40t laser software."""
+def cli(
+    ctx: click.Context,
+    json_mode: bool,
+    project_path: str | None,
+    session_path: str | None,
+    dry_run: bool,
+    device: str,
+    port: str | None,
+    baud: int,
+):
+    """cli-anything-meerk40t - agent CLI for MeerK40t laser software."""
     ctx.ensure_object(dict)
     sys.stdout = _KernelSuppressor(_REAL_STDOUT)
-    backend = Meerk40tBackend()
+    backend = Meerk40tBackend(device=device, port=port, baud=baud)
     backend.start()
     ctx.obj["backend"] = backend
     ctx.obj["json"] = json_mode
@@ -580,6 +596,19 @@ def device_info_cmd(ctx: click.Context):
     _emit(ctx, device_mod.device_info(ctx.obj["backend"]))
 
 
+@device.command("connect")
+@click.pass_context
+def device_connect(ctx: click.Context):
+    """Open the active device's serial connection (e.g. GRBL controller.open())."""
+    _emit(ctx, device_mod.connect(ctx.obj["backend"]))
+
+@device.command("disconnect")
+@click.pass_context
+def device_disconnect(ctx: click.Context):
+    """Close the active device's serial connection (controller.close())."""
+    _emit(ctx, device_mod.disconnect(ctx.obj["backend"]))
+
+
 # ── Export commands ──────────────────────────────────────────────────────────
 
 
@@ -960,6 +989,10 @@ def _dispatch_repl(ctx: click.Context, line: str, skin: ReplSkin, commands: dict
                 result = device_mod.move(backend, x, y, absolute=absolute)
             elif sub == "info":
                 result = device_mod.device_info(backend)
+            elif sub == "connect":
+                result = device_mod.connect(backend)
+            elif sub == "disconnect":
+                result = device_mod.disconnect(backend)
             else:
                 result = {"error": f"Unknown device command: {sub}"}
         elif group == "export":
