@@ -172,8 +172,13 @@ There is no dedicated burn subcommand. Run the job through the console passthrou
 
 Use when the operator wants to see the job on the MeerK40t canvas and own
 the GUI stop/pause buttons while the agent drives everything remotely.
-Requires the patched MeerK40t (branch `fix_console_server_handover`):
-handover resolved at execution time, typed `set` values, `set` feedback.
+Backed by the cli_anything bridge plugin, which registers through the
+`meerk40t.extension` entry point on `pip install`. The plugin back-fills
+three upstream fixes from MeerK40t pull request #3249 at kernel boot when a
+stock PyPI install lacks them: handover resolved at execution time, typed
+`set` values, and `set` feedback. A frozen application build that bundles a
+fixed MeerK40t is unaffected, and once the upstream release ships the fixes
+permanently the plugin becomes a no-op.
 
 1. Write a boot batch file: line 1 `consoleserver -p 2323`, line 2
    `load /path/job.svg`. Launch `meerk40t -b bootfile`.

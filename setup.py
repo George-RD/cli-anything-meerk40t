@@ -41,6 +41,9 @@ setup(
         "console_scripts": [
             "cli-anything-meerk40t=cli_anything.meerk40t.meerk40t_cli:cli",
         ],
+        "meerk40t.extension": [
+            "cli_anything_bridge=cli_anything.meerk40t.mk_plugin:plugin",
+        ],
     },
     package_data={
         "cli_anything.meerk40t": ["skills/*.md", "README.md", "profiles/*.json"],
