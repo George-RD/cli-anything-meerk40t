@@ -14,6 +14,9 @@ import sys
 import tempfile
 import unittest
 import xml.etree.ElementTree as ET
+import glob
+import re as _re
+import socket
 
 from cli_anything.meerk40t.core import elements
 from cli_anything.meerk40t.core import export
@@ -276,6 +279,332 @@ class TestBackendE2E(unittest.TestCase):
         finally:
             backend.shutdown()
 
+
+
+def _gcode_s_values(path):
+    """Return the sorted unique S values found in a G-code file."""
+    text = open(path, "r", encoding="utf-8", errors="replace").read()
+    return sorted({int(m) for m in _re.findall(r"S(\d+)", text)})
+
+
+def _first_last_burn_s(path):
+    """Return (first_burn_s, last_burn_s) scanning G0/G1 lines in order."""
+    text = open(path, "r", encoding="utf-8", errors="replace").read()
+    burns = []
+    for line in text.splitlines():
+        if not (line.startswith("G0") or line.startswith("G1")):
+            continue
+        m = _re.search(r"S(\d+)", line)
+        if m:
+            burns.append(int(m.group(1)))
+    nonzero = [s for s in burns if s > 0]
+    return (nonzero[0] if nonzero else None, nonzero[-1] if nonzero else None)
+
+
+class TestSmartLaserWorkflow(unittest.TestCase):
+    """End-to-end subprocess coverage for the material/job/ladder workflow.
+
+    These drive the installed CLI against the real Meerk40tBackend. No skips:
+    the backend is a required dependency and the tests must fail if it is missing.
+    """
+
+    CLI_BASE = _resolve_cli("cli-anything-meerk40t")
+
+    def setUp(self):
+        self.temp_dir = tempfile.mkdtemp(prefix="mk_smart_")
+        self.fixture = os.path.join(
+            os.path.dirname(os.path.abspath(__file__)), "fixture_3colour.svg"
+        )
+        self.red_only = os.path.join(
+            os.path.dirname(os.path.abspath(__file__)), "fixture_red_only.svg"
+        )
+
+    def tearDown(self):
+        shutil.rmtree(self.temp_dir, ignore_errors=True)
+
+    def _run(self, args, env=None):
+        cmd = self.CLI_BASE + args
+        return subprocess.run(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            check=False,
+            env=env,
+        )
+
+    def _json(self, args, env=None):
+        result = self._run(["--json"] + args, env=env)
+        self.assertEqual(
+            result.returncode,
+            0,
+            f"Command failed: {args}\nstdout: {result.stdout}\nstderr: {result.stderr}",
+        )
+        self.assertTrue(result.stdout.strip(), f"No JSON for {args}")
+        return json.loads(result.stdout)
+
+    def _config_env(self):
+        cfg = tempfile.mkdtemp(prefix="mk_cfg_")
+        env = os.environ.copy()
+        env["CLI_ANYTHING_CONFIG_HOME"] = cfg
+        return env
+
+    def test_materials_list_and_show(self):
+        listing = self._json(["materials", "list"])
+        names = [m["name"] for m in listing["materials"]]
+        self.assertIn("kraft-350gsm", names)
+        roles = self._json(
+            ["materials", "show", "kraft-350gsm", "--machine", "sculpfun-s9"]
+        )
+        self.assertEqual(set(roles["roles"].keys()), {"cut", "score", "etch"})
+
+    def test_job_prepare_gate(self):
+        out = os.path.join(self.temp_dir, "gate")
+        os.makedirs(out, exist_ok=True)
+        args = [
+            "--machine", "sculpfun-s9", "job", "prepare", self.fixture,
+            "--out-dir", out, "--material", "kraft-350gsm",
+        ]
+        denied = self._run(["--json"] + args)
+        self.assertEqual(denied.returncode, 2, denied.stdout + denied.stderr)
+        payload = json.loads(denied.stdout)
+        self.assertEqual(sorted(payload["estimated_roles"]), ["cut", "etch"])
+
+        allowed = self._run(["--json"] + args + ["--allow-estimated"])
+        self.assertEqual(allowed.returncode, 0, allowed.stderr)
+        summary = json.loads(allowed.stdout)
+        gcode = summary["gcode"]
+        self.assertEqual(_gcode_s_values(gcode), [0, 280, 380, 650])
+        first, last = _first_last_burn_s(gcode)
+        self.assertEqual(first, 380)
+        self.assertEqual(last, 650)
+        self.assertTrue(os.path.exists(summary["manifest"]))
+
+        # The allowed prepare passes the same-file preflight gate...
+        pf = self._run(
+            ["--json", "job", "preflight", summary["manifest"], "--allow-estimated"]
+        )
+        self.assertEqual(pf.returncode, 0, pf.stderr)
+        # ...but refuses when estimated roles are not acknowledged.
+        pf2 = self._run(["--json", "job", "preflight", summary["manifest"]])
+        self.assertEqual(pf2.returncode, 2, pf2.stdout)
+
+    def test_determinism_swap(self):
+        env = self._config_env()
+        self._json(
+            ["--machine", "sculpfun-s9", "materials", "create", "swap-test",
+             "--description", "swap material", "--machine", "sculpfun-s9"],
+            env=env,
+        )
+        for role, power, speed in (
+            ("cut", 700, 16.0),
+            ("score", 300, 20.0),
+            ("etch", 410, 40.0),
+        ):
+            self._json(
+                ["--machine", "sculpfun-s9", "materials", "record", "swap-test",
+                 "--machine", "sculpfun-s9", "--role", role, "--power", str(power),
+                 "--speed", str(speed), "--passes", "1", "--provenance", "tested",
+                 "--note", f"{role} test burn on scrap 2026-07-12 clean pass through"],
+                env=env,
+            )
+        out = os.path.join(self.temp_dir, "swap")
+        os.makedirs(out, exist_ok=True)
+        summary = self._json(
+            ["--machine", "sculpfun-s9", "job", "prepare", self.fixture,
+             "--out-dir", out, "--material", "swap-test"],
+            env=env,
+        )
+        self.assertEqual(_gcode_s_values(summary["gcode"]), [0, 300, 410, 700])
+
+    def test_new_material_lifecycle(self):
+        env = self._config_env()
+        self._json(
+            ["--machine", "sculpfun-s9", "materials", "create", "scrap-test",
+             "--description", "x", "--machine", "sculpfun-s9"],
+            env=env,
+        )
+        out = os.path.join(self.temp_dir, "life")
+        os.makedirs(out, exist_ok=True)
+        missing = self._run(
+            ["--machine", "sculpfun-s9", "job", "prepare", self.fixture,
+             "--out-dir", out, "--material", "scrap-test"],
+            env=env,
+        )
+        self.assertEqual(missing.returncode, 1, missing.stdout + missing.stderr)
+        self.assertIn("no 'cut' settings", missing.stdout + missing.stderr)
+
+        lad = os.path.join(self.temp_dir, "lad")
+        os.makedirs(lad, exist_ok=True)
+        bad = self._run(
+            ["--machine", "sculpfun-s9", "job", "ladder", "--out-dir", lad,
+             "--role", "cut", "--powers", "0,1200", "--speed", "16"]
+        )
+        self.assertEqual(bad.returncode, 1, bad.stdout + bad.stderr)
+        self.assertIn("outside the valid range", bad.stdout + bad.stderr)
+        empty = self._run(
+            ["--machine", "sculpfun-s9", "job", "ladder", "--out-dir", lad,
+             "--role", "cut", "--powers", "", "--speed", "16"]
+        )
+        self.assertEqual(empty.returncode, 1, empty.stdout + empty.stderr)
+        good = self._run(
+            ["--machine", "sculpfun-s9", "job", "ladder", "--out-dir", lad,
+             "--role", "cut", "--powers", "550,650,750", "--speed", "16"]
+        )
+        self.assertEqual(good.returncode, 0, good.stdout + good.stderr)
+        gcode_file = glob.glob(os.path.join(lad, "*.gcode"))[0]
+        self.assertEqual(_gcode_s_values(gcode_file), [0, 550, 650, 750])
+
+        short = self._run(
+            ["--machine", "sculpfun-s9", "materials", "record", "scrap-test",
+             "--machine", "sculpfun-s9", "--role", "cut", "--power", "650",
+             "--speed", "16", "--passes", "1", "--provenance", "tested",
+             "--note", "short"],
+            env=env,
+        )
+        self.assertEqual(short.returncode, 1, short.stdout + short.stderr)
+        recorded = self._json(
+            ["--machine", "sculpfun-s9", "materials", "record", "scrap-test",
+             "--machine", "sculpfun-s9", "--role", "cut", "--power", "650",
+             "--speed", "16", "--passes", "1", "--provenance", "tested",
+             "--note", "cut test on scrap 2026-07-12 clean pass through"],
+            env=env,
+        )
+        self.assertEqual(recorded["settings"]["provenance"], "tested")
+        red = os.path.join(self.temp_dir, "red")
+        os.makedirs(red, exist_ok=True)
+        done = self._run(
+            ["--machine", "sculpfun-s9", "job", "prepare", self.red_only,
+             "--out-dir", red, "--material", "scrap-test", "--map", "#ff0000=cut"],
+            env=env,
+        )
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+
+
+class TestAttachRoundTrip(unittest.TestCase):
+    """Attach commands drive a live headless kernel over the consoleserver.
+
+    The kernel + consoleserver run in-process on a free ephemeral port (never
+    2323). The CLI subprocess connects to it. Shutdown is clean (no hang):
+    the console-server module is closed and the kernel is shut down in tearDown.
+    """
+
+    CLI_BASE = _resolve_cli("cli-anything-meerk40t")
+
+    @staticmethod
+    def _free_port():
+        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        s.bind(("", 0))
+        port = s.getsockname()[1]
+        s.close()
+        return port
+
+    def setUp(self):
+        self.temp_dir = tempfile.mkdtemp(prefix="mk_attach_")
+        self.fixture = os.path.join(
+            os.path.dirname(os.path.abspath(__file__)), "fixture_3colour.svg"
+        )
+        self.port = self._free_port()
+        self.kernel = self._boot_kernel(self.port)
+        self._prepare_job()
+
+    def _boot_kernel(self, port):
+        from meerk40t.kernel import Kernel
+        from meerk40t.device import dummydevice
+        import cli_anything.meerk40t.mk_plugin as mk
+        from meerk40t.network import console_server
+        from meerk40t.network.tcp_server import plugin as tcp_plugin
+
+        k = Kernel("MeerK40t", "0.0.0", "attachtest", ansi=False, ignore_settings=True)
+        k.add_plugin(dummydevice.plugin)
+        k.add_plugin(mk.plugin)
+        k.add_plugin(console_server.plugin)
+        k.add_plugin(tcp_plugin)
+        k(partial=True)
+        server = k.root.open_as("module/TCPServer", "console-server", port=port)
+        send = k.root.channel("console-server/send")
+        send.greet = "cli-anything attach test console.\r\n"
+        send.line_end = "\r\n"
+        recv = k.root.channel("console-server/recv")
+        console = k.root.channel("console")
+        console.watch(send)
+        server.events_channel.watch(console)
+
+        def _exec(data):
+            if isinstance(data, bytes):
+                try:
+                    data = data.decode()
+                except UnicodeDecodeError:
+                    return
+            k.root.console(data)
+
+        recv.watch(_exec)
+        return k
+
+    def _prepare_job(self):
+        out = os.path.join(self.temp_dir, "job")
+        os.makedirs(out, exist_ok=True)
+        res = self._run(
+            ["--machine", "sculpfun-s9", "--json", "job", "prepare",
+             self.fixture, "--out-dir", out, "--material", "kraft-350gsm",
+             "--allow-estimated"],
+        )
+        self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
+        summary = json.loads(res.stdout)
+        self.job_svg = summary["job_svg"]
+        self.manifest = summary["manifest"]
+
+    def _run(self, args):
+        cmd = self.CLI_BASE + args
+        return subprocess.run(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            check=False,
+        )
+
+    def tearDown(self):
+        try:
+            self.kernel.root.close("console-server")
+        except Exception:
+            pass
+        try:
+            self.kernel.shutdown()
+        except Exception:
+            pass
+        shutil.rmtree(self.temp_dir, ignore_errors=True)
+
+    def test_attach_status_live(self):
+        res = self._run(
+            ["--machine", "sculpfun-s9", "--json", "attach",
+             "--port", str(self.port), "status"]
+        )
+        self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
+        data = json.loads(res.stdout)
+        self.assertEqual(data["protocol"], 1)
+
+    def test_attach_stage_live(self):
+        res = self._run(
+            ["--machine", "sculpfun-s9", "--json", "attach",
+             "--port", str(self.port), "stage", "--allow-estimated",
+             self.job_svg, self.manifest]
+        )
+        self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
+        data = json.loads(res.stdout)
+        self.assertEqual(data["staged"], self.job_svg)
+        self.assertEqual(len(data["operations"]), 3)
+        powers = sorted(op["power"] for op in data["operations"])
+        self.assertEqual(powers, [280, 380, 650])
+
+    def test_attach_status_closed(self):
+        self.kernel.root.close("console-server")
+        res = self._run(
+            ["--machine", "sculpfun-s9", "--json", "attach",
+             "--port", str(self.port), "status"]
+        )
+        self.assertNotEqual(res.returncode, 0)
+        self.assertIn("no #CLIA1# frame", res.stdout + res.stderr)
 
 if __name__ == "__main__":
     unittest.main()

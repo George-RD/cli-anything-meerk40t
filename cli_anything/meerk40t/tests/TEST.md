@@ -10,11 +10,11 @@ All tests use the Python standard library `unittest` module (no pytest). The bac
 
 | File | Count | Scope |
 |------|-------|-------|
-| `tests/test_core.py` | 94 unit tests | Backend wrapper, project, elements, operations, session, export, device, serial/GRBL probe parsers, profile overlay, export guard, CLI device/machine command-suite wiring, and packaged-skill integrity. |
+| `tests/test_core.py` | 104 unit tests | Backend wrapper, project, elements, operations, session, export, device, serial/GRBL probe parsers, profile overlay, export guard, CLI device/machine command-suite wiring, packaged-skill integrity, materials loader, job-prep provenance, job manifest, and client-frame attachment.
 | `tests/test_mk_plugin.py` | 15 unit tests | MeerK40t back-fill bridge plugin: behavioural upstream detection, `set` replacement, handover transforms, patch idempotence, runtime web-server patch. |
-| `tests/test_full_e2e.py` | 13 E2E tests | CLI subprocess workflows, backend round-trips, and realistic laser-job scenarios. |
+| `tests/test_full_e2e.py` | 20 E2E tests | CLI subprocess workflows, backend round-trips, realistic laser-job scenarios, the smart-laser workflow (materials, job-prepare provenance gate, determinism, new-material lifecycle), and client-frame attach round-trips over a live consoleserver.
 
-Total: 109 unit + 13 E2E = 122 tests.
+Total: 119 unit + 20 E2E = 139 tests.
 
 Both test modules create fresh backends in `setUp` and tear them down in `tearDown`. E2E tests that exercise the installed CLI also fall back to `python -m cli_anything.meerk40t.meerk40t_cli` if the console script is not on `PATH`.
 
@@ -89,6 +89,24 @@ Both test modules create fresh backends in `setUp` and tear them down in `tearDo
 - `test_packaged_router_matches_canonical` — the packaged `skills/SKILL.md` is byte-identical to the canonical `skills/cli-anything-meerk40t/SKILL.md` (skipped on installed wheels without the repo tree).
 - `test_every_linked_reference_is_packaged` — every `references/*.md` linked from the router exists in the package and matches the canonical copy.
 
+### `TestMaterialsLoader` — materials loader
+- `test_bundled_kraft_loads` - the bundled kraft material definition loads from the packaged materials file and resolves to a known profile.
+- `test_user_override_wins` - a user supplied materials file overrides the bundled entry for the same machine or material key.
+- `test_resolve_settings_unknown_machine_raises` - resolving settings for an unknown machine raises an error rather than silently returning defaults.
+
+### `TestJobPrepProvenance` — job-prep provenance gate
+- `test_estimated_cut_raises_without_allow` - preparing a job that relies on an estimated cut raises an error when the provenance allowance flag is not set.
+- `test_estimated_cut_passes_with_allow` - the same job prepares successfully once the allowance flag is set, so the provenance gate is the only thing blocking it.
+
+### `TestJobManifest` — job manifest integrity
+- `test_manifest_written_and_hashes_verify` - a prepared job writes a manifest whose recorded hashes verify against the generated G-code.
+- `test_preflight_rejects_tampered_gcode` - the preflight check rejects G-code whose contents no longer match the recorded manifest hashes.
+
+### `TestAttachClientFrame` — client-frame attachment parser
+- `test_valid_frame_parses` - a well formed protocol 1 client frame parses into its structured fields.
+- `test_prose_only_raises_attacherror` - a message containing only prose with no frame raises AttachError.
+- `test_interleaved_noise_then_frame_parses` - a stream of interleaved noise followed by a valid frame still parses the frame correctly.
+
 ---
 
 ## 3. E2E Test Plan (`test_full_e2e.py`)
@@ -110,6 +128,17 @@ All tests use the helper `_resolve_cli("cli-anything-meerk40t")`, which returns 
 - `test_svg_round_trip` — create a backend, add a circle and a rectangle, save an SVG, create a new backend, load the SVG, and assert at least two elements are restored.
 - `test_full_workflow` — create a project, add circle/rect/text, classify, export SVG, validate the XML, and assert the file is larger than 1000 bytes. This simulates a realistic laser-job preparation workflow.
 
+### `TestSmartLaserWorkflow` — smart-laser workflow
+- `test_materials_list_and_show` - the materials command lists the bundled materials and shows a chosen material's resolved settings.
+- `test_job_prepare_gate` - a job that relies on an estimated cut exits 2 without the allowance flag, then exits 0 with `--allow-estimated`; the generated G-code carries sensible S-values and the preflight check passes.
+- `test_determinism_swap` - swapping the material changes the resolved cut powers, confirming the prepare step is deterministic per material.
+- `test_new_material_lifecycle` - creating a new material with a missing role exits 1, the role is added via the material ladder, a recorded-evidence gate blocks until evidence is supplied, and the job then prepares.
+
+### `TestAttachRoundTrip` — client-frame attach round-trips
+- `test_attach_status_live` - attach status reports protocol 1 over a live consoleserver bound to a free ephemeral port.
+- `test_attach_stage_live` - attach staging over the live consoleserver inventories three operations.
+- `test_attach_status_closed` - attach status returns a no-frame error when the consoleserver port is closed.
+
 ---
 
 ## 3b. Bridge Plugin Suite (`test_mk_plugin.py`)
@@ -119,8 +148,8 @@ detection, console `set` replacement (typed values, feedback, `-p` path flag),
 console/web server handover transforms, patch idempotence and failure
 isolation, the `bridge_status` console command, and the runtime web-server
 patch against a real temp module.
-Together with `test_core.py` (94) this makes 109 unit tests; `test_full_e2e.py`
-adds 13 E2E tests (122 total).
+Together with `test_core.py` (104) this makes 119 unit tests; `test_full_e2e.py`
+adds 20 E2E tests (139 total).
 
 ## 4. Realistic Workflow Scenarios
 
@@ -156,12 +185,12 @@ adds 13 E2E tests (122 total).
 ```
 $ .venv/bin/python -m unittest discover -s cli_anything/meerk40t/tests -p "test_core.py" -v
 
-Ran 69 tests in 1.740s
+Ran 104 tests
 
 OK
 ```
 
-All unit tests passed (historical run at 69-test inventory; current inventory above):
+All unit tests passed (current inventory above):
 - TestBackend: 7 tests (start/shutdown, run/capture, save_svg, load_file, elems, ops, help_text)
 - TestProject: 4 tests (create, open_nonexistent, save, info)
 - TestElements: 8 tests (circle, rect_stroke_fill, ellipse, line, text, list, delete, clear)
@@ -183,30 +212,42 @@ All unit tests passed (historical run at 69-test inventory; current inventory ab
 - TestExportGuard: 2 tests (export_gcode_refuses_default_power, parse_placement_summary)
 - TestCliMachineProfile: 2 tests (cli_unknown_machine_error, cli_machine_list_bundled)
 
+- TestMaterialsLoader: 3 tests (bundled_kraft_loads, user_override_wins, resolve_settings_unknown_machine_raises)
+- TestJobPrepProvenance: 2 tests (estimated_cut_raises_without_allow, estimated_cut_passes_with_allow)
+- TestJobManifest: 2 tests (manifest_written_and_hashes_verify, preflight_rejects_tampered_gcode)
+- TestAttachClientFrame: 3 tests (valid_frame_parses, prose_only_raises_attacherror, interleaved_noise_then_frame_parses)
+
 ### E2E Tests (test_full_e2e.py)
 
 ```
-$ .venv/bin/python -m unittest discover -s cli_anything/meerk40t/tests -p "test_full_e2e.py" -v
+$ .venv/bin/python -m pytest cli_anything/meerk40t/tests/test_full_e2e.py -v
 
-Ran 13 tests in 8.827s
+20 passed in ~16s
 
 OK
 ```
 
-All 13 E2E tests passed:
-- TestCLISubprocess: 10 tests (help, project_new_json, elements_circle_json, elements_rect_stroke_fill, elements_list, export_svg, console_passthrough, persistence, elements_transformations_cli, operations_management_cli) — all via the installed `cli-anything-meerk40t` command
+All 20 E2E tests passed:
+- TestCLISubprocess: 10 tests (help, project_new_json, elements_circle_json, elements_rect_stroke_fill, elements_list, export_svg, console_passthrough, persistence, elements_transformations_cli, operations_management_cli) via the installed `cli-anything-meerk40t` command
 - TestBackendE2E: 3 tests (gcode_export_with_grbl, svg_round_trip, full_workflow)
+- TestSmartLaserWorkflow: 4 tests (materials_list_and_show, job_prepare_gate, determinism_swap, new_material_lifecycle) covering the provenance gate, deterministic material swap, and new-material calibration lifecycle
+- TestAttachRoundTrip: 3 tests (attach_status_live, attach_stage_live, attach_status_closed) over a live consoleserver on a free ephemeral port
 
 ### Summary Statistics
 
 | Suite | Tests | Passed | Failed | Time |
 |---|---|---|---|---|
-| test_core | 94 | 94 | 0 | 2.41s |
-| test_mk_plugin | 15 | 15 | 0 | 0.10s |
-| test_full_e2e | 13 | 13 | 0 | 7.52s |
-| **Total** | **122** | **122** | **0** | **10.03s** |
+| test_core | 104 | 104 | 0 | 4.2s |
+| test_mk_plugin | 15 | 15 | 0 | 0.12s |
+| test_full_e2e | 20 | 20 | 0 | 16.0s |
+| **Total** | **139** | **139** | **0** | **~20s** |
 
 Pass rate: 100%
+
+Each test file also passes standalone. A `conftest.py` caches the real
+top-level `meerk40t` package before any test module imports, fixing an
+order-dependent import-shadow bug (the `cli_anything/meerk40t` harness package
+shadowing the installed `meerk40t`) that otherwise broke single-file runs.
 
 ### Coverage Notes
 
@@ -225,6 +266,8 @@ Pass rate: 100%
 - Persistence across CLI invocations verified via `-p` flag
 - Console passthrough verified
 - SVG round-trip (save → load) verified with element count check
+
+- A new `conftest.py` caches the real top-level `meerk40t` package before the test modules import, fixing an order-dependent import-shadowing bug (the `cli_anything/meerk40t` shadow versus the installed `meerk40t`) so each test file now runs green on its own.
 
 ### Artifacts
 

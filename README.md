@@ -45,8 +45,32 @@ cli-anything-meerk40t --machine sculpfun-s9 --port /dev/cu.usbserial-10 device f
 cli-anything-meerk40t --device grbl --machine sculpfun-s9 --project /tmp/job.svg export gcode /tmp/job.gcode
 ```
 
-The export prints a placement summary: the bounding box, the bed origin, and
-the Y-flip applied. Check it before the operator runs the job.
+The export prints a placement summary: the bounding box, the bed origin, and the Y-flip applied. Check it before the operator runs the job.
+
+## Prepare and stage a material-driven job
+
+Settings come from a material profile, not hand-typed per job. Build the
+artefacts, re-verify them, then stage them on a running GUI kernel:
+
+```bash
+# 1. Prepare: resolve settings from the material, write job SVG + G-code + manifest
+cli-anything-meerk40t --machine sculpfun-s9 job prepare design.svg \
+  --out-dir /tmp/j --material kraft-350gsm --json
+# exits 2 if any role is estimated; add --allow-estimated to acknowledge
+
+# 2. Preflight: re-check file hashes and settings fingerprint before staging
+cli-anything-meerk40t job preflight /tmp/j/design_manifest.json --allow-estimated
+
+# 3. Stage: verify the manifest, then load the job SVG on the live GUI kernel
+cli-anything-meerk40t attach --port 2323 stage /tmp/j/design_job.svg \
+  /tmp/j/design_manifest.json --allow-estimated
+```
+
+`--json` and `--machine` are root options, passed before the subcommand.
+The operator still runs the GRBL bring-up (origin, focus, glasses,
+ventilation) and presses Start on the GUI. See the skill's
+[references/materials.md](skills/cli-anything-meerk40t/references/materials.md)
+for calibration.
 
 ## What it does
 
@@ -74,6 +98,9 @@ Two skills ship with this harness:
 | `operations` | list, add (cut/engrave/raster/image/dots), classify, declassify, set |
 | `device` | list, status, home, physical-home, move, info, connect, disconnect, detect, check, jog, goto, frame, setup |
 | `machine` | list profiles (bundled and user, with origin) |
+| `materials` | list, show, create, record (calibrated laser settings per machine) |
+| `job` | prepare, preflight, ladder (material-driven job prep and calibration) |
+| `attach` | status, stage (drive a running GUI kernel over the console channel) |
 | `profile` | submit NAME - contribute a community machine profile |
 | `export` | svg, svgz (real backend); png (GUI-dependent); gcode (GRBL device required) |
 | `console` | Raw passthrough to the MeerK40t kernel console |

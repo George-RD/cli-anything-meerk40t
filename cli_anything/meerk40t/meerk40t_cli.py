@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import copy
 import functools
+import hashlib
 import json
 import os
 import sys
+from pathlib import Path
 from typing import Any
 
 import click
@@ -19,6 +22,9 @@ from cli_anything.meerk40t.core import session as session_mod
 from cli_anything.meerk40t.utils.meerk40t_backend import Meerk40tBackend
 from cli_anything.meerk40t.utils import profiles as profiles_mod
 from cli_anything.meerk40t.utils import submit as submit_mod
+from cli_anything.meerk40t.utils import attach_client as attach_client_mod
+from cli_anything.meerk40t.utils import job_prep as job_prep_mod
+from cli_anything.meerk40t.utils import materials as materials_mod
 from cli_anything.meerk40t.utils.repl_skin import ReplSkin
 # Driver choices for --device. Extracted to a module-level var so the
 # skill_generator regex (which chokes on nested parens in decorators) does
@@ -26,6 +32,11 @@ from cli_anything.meerk40t.utils.repl_skin import ReplSkin
 DEVICE_CHOICES = click.Choice(
     ["dummy", "grbl", "lihuiyu", "moshi", "ruida", "newly", "balor"]
 )
+# Provenance / role enums extracted to module-level vars so the
+# skill_generator regex (which rejects nested parens in Click decorators)
+# does not trip over click.Choice([...]) inline.
+PROVENANCE_CHOICES = click.Choice(["tested", "estimated"])
+ROLE_CHOICES = click.Choice(["cut", "score", "etch"])
 
 
 # Real stdout handle used for all user-facing output (kernel noise is suppressed).
@@ -238,15 +249,22 @@ def cli(
         if profile.get("baud"):
             baud = profile["baud"]
 
-    backend = Meerk40tBackend(device=device, port=port, baud=baud)
-    backend.start()
+    # The attach subcommand is a thin client over the consoleserver control
+    # channel and never touches the local kernel; skip the backend bootstrap
+    # so `attach status` against a missing server fails fast instead of
+    # paying the Meerk40t kernel startup cost.
+    if ctx.invoked_subcommand == "attach":
+        backend = None
+    else:
+        backend = Meerk40tBackend(device=device, port=port, baud=baud)
+        backend.start()
     ctx.obj["backend"] = backend
 
     # Apply the profile's bed dimensions to the active device view.
-    if profile is not None:
+    if profile is not None and backend is not None:
         _apply_machine_profile(backend, profile)
+    ctx.obj["machine_name"] = machine
     ctx.obj["project_path"] = project_path
-
     if session_path:
         sess = session_mod.Session(session_path)
     else:
@@ -1237,5 +1255,529 @@ def _dispatch_repl(ctx: click.Context, line: str, skin: ReplSkin, commands: dict
     _emit(ctx, result)
 
 
+# ── Preflight (shared by `job preflight` and `attach stage`) ────────────────
+
+
+OPERATOR_CHECKLIST = [
+    "sheet placed + origin confirmed",
+    "overhang supported flat",
+    "diode focused",
+    "rated glasses on",
+    "ventilation running",
+    "extinguisher/fire blanket in reach",
+    "operator stays for entire burn",
+]
+
+
+def _sha256_file(path: str) -> str | None:
+    """Return the sha256 hex digest of a file, or None if it is missing/unreadable."""
+    try:
+        h = hashlib.sha256()
+        with open(path, "rb") as fh:
+            for chunk in iter(lambda: fh.read(65536), b""):
+                h.update(chunk)
+        return h.hexdigest()
+    except OSError:
+        return None
+
+
+def _run_preflight(
+    manifest_path: str, *, allow_estimated: bool, stage_mode: bool = False
+) -> tuple[dict, int]:
+    """Re-verify a job manifest. One code path for `job preflight` and `attach stage`.
+
+    Returns ``(result, exit_code)``. Hard failures (hash mismatch, missing file,
+    changed material settings, failed verification) are exit 1 for ``job
+    preflight`` and exit 2 for ``attach stage`` (every staging refusal is an
+    acknowledgeable gate). Estimated roles without ``--allow-estimated`` always
+    take precedence as the exit-2 acknowledgeable gate. Ladder manifests skip
+    the settings-fingerprint re-resolution (their fingerprint is null).
+    """
+    mpath = Path(manifest_path).resolve()
+    if not mpath.exists():
+        return (
+            {"ok": False, "failures": [f"manifest not found: {mpath}"]},
+            2 if stage_mode else 1,
+        )
+    try:
+        manifest = json.loads(mpath.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        return (
+            {"ok": False, "failures": [f"manifest unreadable: {exc}"]},
+            2 if stage_mode else 1,
+        )
+
+    is_ladder = manifest.get("kind") == "ladder"
+    failures: list[str] = []
+    warnings: list[str] = []
+
+    # 1. Recompute sha256 for every file recorded at prepare time.
+    files = manifest.get("files", {})
+    for fname in ("input_svg", "job_svg", "gcode"):
+        entry = files.get(fname) or {}
+        path = entry.get("path")
+        recorded = entry.get("sha256")
+        if not path:
+            failures.append(f"manifest missing files.{fname}")
+            continue
+        actual = _sha256_file(path)
+        if actual is None:
+            failures.append(f"{fname} missing: {path} - regenerate with job prepare")
+        elif actual != recorded:
+            failures.append(f"{fname} hash mismatch: {path} - regenerate with job prepare")
+
+    # 2. Re-resolve material + machine and recompute the settings fingerprint.
+    #    Ladder manifests have no settings_fingerprint to check.
+    if not is_ladder:
+        fingerprint = manifest.get("settings_fingerprint")
+        machine = manifest.get("machine")
+        material = manifest.get("material")
+        try:
+            mat = materials_mod.load_material(material) if material else None
+            if mat is None:
+                failures.append(
+                    f"material {material!r} no longer available - re-run job prepare"
+                )
+            else:
+                roles = materials_mod.resolve_settings(mat, machine)
+                payload = json.dumps(roles, sort_keys=True)
+                actual_fp = hashlib.sha256(payload.encode("utf-8")).hexdigest()
+                if actual_fp != fingerprint:
+                    failures.append(
+                        "material settings changed since prepare - re-run job prepare"
+                    )
+        except ValueError as exc:
+            failures.append(f"{exc} - re-run job prepare")
+
+    # 3. Re-check the recorded verification verdict.
+    verification = manifest.get("verification", {})
+    if not verification.get("all_passed"):
+        failures.append(
+            "recorded verification did not pass - regenerate with job prepare"
+        )
+
+    estimated_roles = list(manifest.get("estimated_roles", []))
+
+    # 4. Estimated-role re-affirmation gate. This is the acknowledgeable exit-2
+    #    gate and takes precedence over hard failures so the operator is told
+    #    to acknowledge (or recalibrate) before anything else.
+    if estimated_roles and not allow_estimated:
+        gate = list(failures)
+        gate.append(
+            f"estimated roles {estimated_roles} require --allow-estimated"
+        )
+        return (
+            {"ok": False, "failures": gate, "estimated_roles": estimated_roles},
+            2,
+        )
+    if estimated_roles:
+        warnings.append(
+            f"estimated roles acknowledged under --allow-estimated: {estimated_roles}"
+        )
+
+    hard_exit = 2 if stage_mode else 1
+    if failures:
+        return ({"ok": False, "failures": failures}, hard_exit)
+
+    checklist = list(OPERATOR_CHECKLIST)
+    if is_ladder:
+        checklist.append("burn on SCRAP of the target material only")
+    return (
+        {
+            "ok": True,
+            "manifest": str(mpath),
+            "kind": manifest.get("kind", "job"),
+            "machine": manifest.get("machine"),
+            "material": manifest.get("material"),
+            "estimated_roles": estimated_roles,
+            "operations": manifest.get("operations", []),
+            "warnings": warnings,
+            "checklist": checklist,
+        },
+        0,
+    )
+
+
+# ── materials group ─────────────────────────────────────────────────────────
+
+
+@cli.group()
+def materials():
+    """Material profile management (calibrated laser settings per machine)."""
+
+
+@materials.command("list")
+@click.pass_context
+def materials_list(ctx):
+    """List available materials (bundled and user)."""
+    _emit(ctx, {"materials": materials_mod.list_materials()})
+
+
+@materials.command("show")
+@click.argument("name")
+@click.option("--machine", "machine", default=None, help="Show only this machine's role settings.")
+@click.pass_context
+def materials_show(ctx, name, machine):
+    """Show a material profile, or one machine's role settings with --machine."""
+    material = materials_mod.load_material(name)
+    if material is None:
+        _emit(
+            ctx,
+            {
+                "error": f"unknown material: {name!r}",
+                "known": materials_mod.available_names(),
+            },
+        )
+        sys.stdout = _REAL_STDOUT
+        ctx.exit(1)
+    if machine is not None:
+        try:
+            roles = materials_mod.resolve_settings(material, machine)
+        except ValueError as exc:
+            _emit(ctx, {"error": str(exc)})
+            sys.stdout = _REAL_STDOUT
+            ctx.exit(1)
+        _emit(ctx, {"machine": machine, "roles": roles})
+        return
+    _emit(ctx, material)
+
+
+@materials.command("create")
+@click.argument("name")
+@click.option("--description", "description", required=True, help="Human-readable description.")
+@click.option("--machine", "machine", default=None, help="Create an empty machine section.")
+@click.pass_context
+def materials_create(ctx, name, description, machine):
+    """Create an empty user material (no role settings yet)."""
+    if materials_mod.load_material(name) is not None:
+        _emit(ctx, {"error": f"material {name!r} already exists"})
+        sys.stdout = _REAL_STDOUT
+        ctx.exit(1)
+    machines: dict[str, dict] = {}
+    if machine is not None:
+        machines[machine] = {"roles": {}}
+    data = {"name": name, "description": description, "machines": machines}
+    path = materials_mod.save_user_material(name, data)
+    _emit(
+        ctx,
+        {
+            "created": name,
+            "path": str(path),
+            "next": "roles are empty - run 'job ladder' on scrap, then 'materials record' to add calibrated settings",
+        },
+    )
+
+
+@materials.command("record")
+@click.argument("name")
+@click.option("--machine", "machine", required=True, help="Machine name.")
+@click.option("--role", "role", type=ROLE_CHOICES, required=True, help="Role to record (cut, score, etch).")
+@click.option("--power", "power", type=int, required=True, help="Laser power (S value, 1..1000).")
+@click.option("--speed", "speed", type=float, required=True, help="Feed rate in mm/s.")
+@click.option("--passes", "passes", type=int, required=True, help="Number of passes.")
+@click.option("--provenance", "provenance", type=PROVENANCE_CHOICES, required=True, help="tested (observed) or estimated (rationale).")
+@click.option("--note", "note", required=True, help="Evidence (tested) or rationale (estimated) for the setting.")
+@click.pass_context
+def materials_record(ctx, name, machine, role, power, speed, passes, provenance, note):
+    """Record a calibrated (or estimated) role setting into a user material."""
+    # Evidence rule: tested settings require a note describing the observation.
+    # Checked before any load/write so a refused record writes nothing.
+    if provenance == "tested" and len(note) < 20:
+        _emit(
+            ctx,
+            {
+                "error": "tested provenance requires evidence: describe the test burn in --note (material, pattern, settings, observation, date)"
+            },
+        )
+        sys.stdout = _REAL_STDOUT
+        ctx.exit(1)
+    material = materials_mod.load_material(name)
+    if material is None:
+        _emit(
+            ctx,
+            {
+                "error": f"unknown material: {name!r}",
+                "known": materials_mod.available_names(),
+            },
+        )
+        sys.stdout = _REAL_STDOUT
+        ctx.exit(1)
+    updated = copy.deepcopy(material)
+    machine_section = updated.setdefault("machines", {}).setdefault(machine, {"roles": {}})
+    roles = machine_section.setdefault("roles", {})
+    roles[role] = {
+        "kind": "cut" if role == "cut" else "engrave",
+        "passes": passes,
+        "power": power,
+        "speed": speed,
+        "provenance": provenance,
+        "note": note,
+    }
+    path = materials_mod.save_user_material(name, updated)
+    _emit(
+        ctx,
+        {
+            "recorded": name,
+            "machine": machine,
+            "role": role,
+            "path": str(path),
+            "settings": roles[role],
+        },
+    )
+
+
+# ── job group ───────────────────────────────────────────────────────────────
+
+
+@cli.group()
+def job():
+    """Laser job preparation: prepare, preflight, and calibration ladders."""
+
+
+@job.command("prepare")
+@click.argument("input_svg")
+@click.option("--out-dir", "out_dir", required=True, help="Directory for job artefacts.")
+@click.option("--material", "material", default=None, help="Material profile name.")
+@click.option("--allow-estimated", is_flag=True, default=False, help="Allow untested (estimated) settings through the gate.")
+@click.option("--map", "color_maps", multiple=True, help="Colour=role mapping (e.g. #ff0000=cut). Replaces the default map wholesale.")
+@click.pass_context
+def job_prepare(ctx, input_svg, out_dir, material, allow_estimated, color_maps):
+    """Prepare a verified job SVG + G-code + manifest from a design SVG."""
+    machine = ctx.obj.get("machine_name")
+    if not machine:
+        _emit(ctx, {"error": "--machine NAME is required for job prepare"})
+        sys.stdout = _REAL_STDOUT
+        ctx.exit(1)
+    if not material:
+        _emit(ctx, {"error": "--material NAME is required for job prepare"})
+        sys.stdout = _REAL_STDOUT
+        ctx.exit(1)
+
+    color_map = None
+    if color_maps:
+        color_map = {}
+        for item in color_maps:
+            if "=" not in item:
+                _emit(ctx, {"error": f"invalid --map {item!r}; expected #rrggbb=role"})
+                sys.stdout = _REAL_STDOUT
+                ctx.exit(1)
+            color, role = item.split("=", 1)
+            color_map[color.strip()] = role.strip()
+
+    try:
+        summary = job_prep_mod.prepare_job(
+            input_svg,
+            out_dir,
+            machine=machine,
+            material=material,
+            color_map=color_map,
+            allow_estimated=allow_estimated,
+        )
+    except job_prep_mod.UncalibratedSettingsError as exc:
+        _emit(ctx, {"error": str(exc), "estimated_roles": list(exc.estimated_roles)})
+        sys.stdout = _REAL_STDOUT
+        ctx.exit(2)
+    except (job_prep_mod.MissingRoleError, job_prep_mod.JobPrepError) as exc:
+        _emit(ctx, {"error": str(exc)})
+        sys.stdout = _REAL_STDOUT
+        ctx.exit(1)
+    except (FileNotFoundError, RuntimeError, ValueError) as exc:
+        _emit(ctx, {"error": str(exc)})
+        sys.stdout = _REAL_STDOUT
+        ctx.exit(1)
+
+    if not summary.get("verification", {}).get("all_passed"):
+        _emit(ctx, summary)
+        sys.stdout = _REAL_STDOUT
+        ctx.exit(1)
+    _emit(ctx, summary)
+
+
+@job.command("preflight")
+@click.argument("manifest")
+@click.option("--allow-estimated", is_flag=True, default=False, help="Acknowledge estimated-role settings.")
+@click.pass_context
+def job_preflight(ctx, manifest, allow_estimated):
+    """Re-verify a job manifest: file hashes, settings fingerprint, verification."""
+    result, code = _run_preflight(manifest, allow_estimated=allow_estimated)
+    _emit(ctx, result)
+    if code != 0:
+        sys.stdout = _REAL_STDOUT
+        ctx.exit(code)
+
+
+@job.command("ladder")
+@click.option("--out-dir", "out_dir", required=True, help="Directory for ladder artefacts.")
+@click.option("--role", "role", type=ROLE_CHOICES, required=True, help="Role to calibrate (cut, score, etch).")
+@click.option("--powers", "powers", required=True, help="Comma-separated power values, e.g. 550,650,750.")
+@click.option("--speed", "speed", type=float, required=True, help="Feed rate in mm/s.")
+@click.option("--passes", "passes", type=int, default=1, show_default=True, help="Passes per line.")
+@click.option("--length", "length", type=float, default=20.0, show_default=True, help="Line length in mm.")
+@click.option("--pitch", "pitch", type=float, default=6.0, show_default=True, help="Vertical pitch between lines in mm.")
+@click.pass_context
+def job_ladder(ctx, out_dir, role, powers, speed, passes, length, pitch):
+    """Generate a calibration ladder (one line per power) for a role."""
+    machine = ctx.obj.get("machine_name")
+    if not machine:
+        _emit(ctx, {"error": "--machine NAME is required for job ladder"})
+        sys.stdout = _REAL_STDOUT
+        ctx.exit(1)
+
+    # Parse powers before the kernel starts so bad input is a clean error.
+    parsed_powers: list[int] = []
+    for token in powers.split(","):
+        token = token.strip()
+        if token == "":
+            continue
+        try:
+            parsed_powers.append(int(token))
+        except ValueError:
+            _emit(ctx, {"error": f"invalid --powers entry {token!r}; expected integers"})
+            sys.stdout = _REAL_STDOUT
+            ctx.exit(1)
+    if not parsed_powers:
+        _emit(ctx, {"error": "--powers must contain at least one power value"})
+        sys.stdout = _REAL_STDOUT
+        ctx.exit(1)
+
+    try:
+        summary = job_prep_mod.prepare_ladder(
+            out_dir,
+            machine=machine,
+            role=role,
+            powers=parsed_powers,
+            speed=speed,
+            passes=passes,
+            length=length,
+            pitch=pitch,
+        )
+    except job_prep_mod.JobPrepError as exc:
+        _emit(ctx, {"error": str(exc)})
+        sys.stdout = _REAL_STDOUT
+        ctx.exit(1)
+    except (FileNotFoundError, RuntimeError, ValueError) as exc:
+        _emit(ctx, {"error": str(exc)})
+        sys.stdout = _REAL_STDOUT
+        ctx.exit(1)
+
+    table = [{"line": i + 1, "power": p} for i, p in enumerate(parsed_powers)]
+    _emit(
+        ctx,
+        {
+            "role": role,
+            "machine": machine,
+            "powers": parsed_powers,
+            "table": table,
+            "summary": summary,
+            "next": (
+                "after burning, record the winning step: cli-anything-meerk40t "
+                f"materials record <name> --machine {machine} --role {role} "
+                f"--power <P> --speed {speed} --passes {passes} "
+                "--provenance tested --note '<what you burned and saw, with date>'"
+            ),
+        },
+    )
+
+
+# ── attach group (thin client over the consoleserver control channel) ───────
+
+
+@cli.group()
+@click.option("--host", "host", default="localhost", show_default=True, help="consoleserver host.")
+@click.option("--port", "port", default=2323, type=int, show_default=True, help="consoleserver port.")
+@click.pass_context
+def attach(ctx, host, port):
+    """Drive the running MeerK40t GUI kernel over the consoleserver control channel."""
+    ctx.obj["attach_host"] = host
+    ctx.obj["attach_port"] = port
+
+
+def _attach_send(ctx, command):
+    """Send a framed command, mapping any failure to a no-frame-style error dict."""
+    try:
+        return None, attach_client_mod.send(ctx.obj["attach_host"], ctx.obj["attach_port"], command)
+    except attach_client_mod.AttachError as exc:
+        return {"error": str(exc)}, None
+    except OSError as exc:
+        # Connection refused / unreachable: the control module is not reachable.
+        return {
+            "error": (
+                "no #CLIA1# frame received - is the GUI running with the "
+                f"cli-anything extension? (connection failed: {exc})"
+            )
+        }, None
+
+
+@attach.command("status")
+@click.pass_context
+def attach_status(ctx):
+    """Query the live kernel: devices, bed, element/op counts, spooler."""
+    err, reply = _attach_send(ctx, "agent status")
+    if err is not None:
+        _emit(ctx, err)
+        sys.stdout = _REAL_STDOUT
+        ctx.exit(1)
+    _emit(ctx, reply)
+
+
+@attach.command("stage")
+@click.argument("job_svg")
+@click.argument("manifest")
+@click.option("--allow-estimated", is_flag=True, default=False, help="Acknowledge estimated-role settings at the machine boundary.")
+@click.pass_context
+def attach_stage(ctx, job_svg, manifest, allow_estimated):
+    """Verify a job manifest, then stage the job SVG on the live kernel."""
+    job_svg_abs = str(Path(job_svg).resolve())
+    mpath = Path(manifest).resolve()
+
+    if not mpath.exists():
+        _emit(ctx, {"ok": False, "failures": [f"manifest not found: {mpath}"]})
+        sys.stdout = _REAL_STDOUT
+        ctx.exit(2)
+    try:
+        manifest_data = json.loads(mpath.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        _emit(ctx, {"ok": False, "failures": [f"manifest unreadable: {exc}"]})
+        sys.stdout = _REAL_STDOUT
+        ctx.exit(2)
+
+    # The staged file must be the exact file whose hashes were verified: one
+    # object carries the design, the verified hashes, and the material identity.
+    recorded_job_svg = manifest_data.get("files", {}).get("job_svg", {}).get("path")
+    if recorded_job_svg != job_svg_abs:
+        _emit(
+            ctx,
+            {
+                "ok": False,
+                "failures": [
+                    f"job SVG {job_svg_abs!r} does not match manifest files.job_svg.path {recorded_job_svg!r}"
+                ],
+            },
+        )
+        sys.stdout = _REAL_STDOUT
+        ctx.exit(2)
+
+    result, code = _run_preflight(manifest, allow_estimated=allow_estimated, stage_mode=True)
+    if not result.get("ok"):
+        _emit(ctx, result)
+        sys.stdout = _REAL_STDOUT
+        ctx.exit(code)
+
+    err, stage_reply = _attach_send(ctx, f"agent stage {job_svg_abs}")
+    if err is not None:
+        _emit(ctx, err)
+        sys.stdout = _REAL_STDOUT
+        ctx.exit(1)
+
+    _emit(
+        ctx,
+        {
+            "staged": job_svg_abs,
+            "manifest": str(mpath),
+            "material": manifest_data.get("material"),
+            "estimated_roles": list(manifest_data.get("estimated_roles", [])),
+            "operations": stage_reply.get("operations", manifest_data.get("operations", [])),
+        },
+    )
 if __name__ == "__main__":
     cli()
