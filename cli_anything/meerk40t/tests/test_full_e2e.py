@@ -480,6 +480,22 @@ class TestSmartLaserWorkflow(unittest.TestCase):
         )
         self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
 
+    def test_attach_ignores_global_project_and_skips_kernel(self):
+        # A global --project must not boot or touch the local kernel for the
+        # attach thin client: it fast-fails on a dead port with the no-frame
+        # error rather than crashing on a None backend or paying kernel cost.
+        probe = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        probe.bind(("", 0))
+        dead_port = probe.getsockname()[1]
+        probe.close()  # nothing listens here now -> connection refused
+        res = self._run(
+            ["--json", "--project", self.fixture, "attach",
+             "--port", str(dead_port), "status"]
+        )
+        self.assertNotEqual(res.returncode, 0)
+        self.assertIn("no #CLIA1# frame", res.stdout + res.stderr)
+        self.assertNotIn("Traceback", res.stdout + res.stderr)
+
 
 class TestAttachRoundTrip(unittest.TestCase):
     """Attach commands drive a live headless kernel over the consoleserver.

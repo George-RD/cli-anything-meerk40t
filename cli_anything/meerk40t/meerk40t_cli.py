@@ -271,7 +271,7 @@ def cli(
         sess = None
     ctx.obj["session"] = sess
 
-    if project_path:
+    if project_path and backend is not None:
         project_mod.open_project(backend, project_path)
         if sess:
             sess.name = os.path.basename(project_path)
