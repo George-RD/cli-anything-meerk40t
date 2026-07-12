@@ -94,8 +94,8 @@ without `--allow-estimated`.
 ### Canonical burn-prep path
 
 ```
-cli-anything-meerk40t --machine sculpfun-s9 job prepare design.svg \
-  --out-dir /tmp/j --material kraft-350gsm --json
+cli-anything-meerk40t --json --machine sculpfun-s9 job prepare design.svg \
+  --out-dir /tmp/j --material kraft-350gsm
 # exits 2 if any role is estimated; add --allow-estimated to acknowledge
 cli-anything-meerk40t job preflight /tmp/j/design_manifest.json --allow-estimated
 # re-verifies file hashes and settings fingerprint; prints the operator checklist

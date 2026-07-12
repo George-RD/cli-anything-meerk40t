@@ -1523,6 +1523,154 @@ class TestJobManifest(JobFixtureTestCase):
         )
 
 
+class TestJobPrepValidation(JobFixtureTestCase):
+    """Findings 5, 8, 9: value/geometry validation and custom-map role filtering."""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp(prefix="mk_jpv_")
+        self.out = tempfile.mkdtemp(prefix="mk_jpvout_")
+        self.svg = os.path.join(self.tmp, "design.svg")
+        self._make_red_svg(self.svg)
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp, ignore_errors=True)
+        shutil.rmtree(self.out, ignore_errors=True)
+
+    def _make_3role_material(self, name, config_home, *, cut_provenance="estimated"):
+        data = {
+            "name": name,
+            "description": "fixture 3-role material",
+            "machines": {
+                "sculpfun-s9": {
+                    "roles": {
+                        "etch": {
+                            "kind": "engrave", "passes": 1, "power": 300,
+                            "speed": 40.0, "provenance": "tested", "note": "f",
+                        },
+                        "score": {
+                            "kind": "engrave", "passes": 1, "power": 250,
+                            "speed": 30.0, "provenance": "tested", "note": "f",
+                        },
+                        "cut": {
+                            "kind": "cut", "passes": 1, "power": 650,
+                            "speed": 16.0, "provenance": cut_provenance, "note": "f",
+                        },
+                    }
+                }
+            },
+        }
+        materials_mod.save_user_material(name, data, config_home=config_home)
+
+    def _make_value_material(self, name, config_home, *, power=650, speed=16.0, passes=1):
+        data = {
+            "name": name,
+            "description": "fixture value material",
+            "machines": {
+                "sculpfun-s9": {
+                    "roles": {
+                        "cut": {
+                            "kind": "cut", "passes": passes, "power": power,
+                            "speed": speed, "provenance": "tested", "note": "f",
+                        }
+                    }
+                }
+            },
+        }
+        materials_mod.save_user_material(name, data, config_home=config_home)
+
+    def test_custom_map_single_role_no_keyerror(self):
+        # Finding 9: a three-role material with a single-role custom map must
+        # produce exactly one op (cut) and limit estimated_roles to that role.
+        name = "three-role-fixture"
+        self._make_3role_material(name, self.tmp, cut_provenance="estimated")
+        summary = job_prep_mod.prepare_job(
+            self.svg, self.out,
+            machine="sculpfun-s9", material=name,
+            color_map={"#ff0000": "cut"}, allow_estimated=True,
+            config_home=self.tmp,
+        )
+        self.assertEqual(len(summary["operations"]), 1)
+        self.assertEqual(summary["operations"][0]["kind"], "cut")
+        self.assertEqual(summary["estimated_roles"], ["cut"])
+
+    def test_custom_map_missing_role_raises(self):
+        # Finding 9: a role named in the map that the material lacks still
+        # raises MissingRoleError.
+        name = "three-role-fixture"
+        self._make_3role_material(name, self.tmp)
+        with self.assertRaises(job_prep_mod.MissingRoleError):
+            job_prep_mod.prepare_job(
+                self.svg, self.out,
+                machine="sculpfun-s9", material=name,
+                color_map={"#ff0000": "engrave"}, allow_estimated=True,
+                config_home=self.tmp,
+            )
+
+    def test_out_of_range_power_raises(self):
+        # Finding 5: power outside 1..1000 is rejected before the kernel boots.
+        name = "bad-power"
+        self._make_value_material(name, self.tmp, power=5000)
+        with self.assertRaises(job_prep_mod.JobPrepError) as ctx:
+            job_prep_mod.prepare_job(
+                self.svg, self.out,
+                machine="sculpfun-s9", material=name,
+                color_map={"#ff0000": "cut"}, config_home=self.tmp,
+            )
+        self.assertIn("power", str(ctx.exception))
+
+    def test_out_of_range_speed_raises(self):
+        name = "bad-speed"
+        self._make_value_material(name, self.tmp, speed=0.0)
+        with self.assertRaises(job_prep_mod.JobPrepError) as ctx:
+            job_prep_mod.prepare_job(
+                self.svg, self.out,
+                machine="sculpfun-s9", material=name,
+                color_map={"#ff0000": "cut"}, config_home=self.tmp,
+            )
+        self.assertIn("speed", str(ctx.exception))
+
+    def test_out_of_range_passes_raises(self):
+        name = "bad-passes"
+        self._make_value_material(name, self.tmp, passes=0)
+        with self.assertRaises(job_prep_mod.JobPrepError) as ctx:
+            job_prep_mod.prepare_job(
+                self.svg, self.out,
+                machine="sculpfun-s9", material=name,
+                color_map={"#ff0000": "cut"}, config_home=self.tmp,
+            )
+        self.assertIn("passes", str(ctx.exception))
+
+    def _run_ladder(self, **overrides):
+        kwargs = dict(
+            out_dir=self.out, machine="sculpfun-s9", role="cut",
+            powers=[100, 200], speed=16.0, passes=1, length=20.0, pitch=6.0,
+        )
+        kwargs.update(overrides)
+        return job_prep_mod.prepare_ladder(**kwargs)
+
+    def test_ladder_length_zero_raises(self):
+        # Finding 8: non-positive length is rejected before writing files.
+        with self.assertRaises(job_prep_mod.JobPrepError) as ctx:
+            self._run_ladder(length=0.0)
+        self.assertIn("length", str(ctx.exception))
+
+    def test_ladder_pitch_zero_raises(self):
+        with self.assertRaises(job_prep_mod.JobPrepError) as ctx:
+            self._run_ladder(pitch=0.0)
+        self.assertIn("pitch", str(ctx.exception))
+
+    def test_ladder_passes_zero_raises(self):
+        with self.assertRaises(job_prep_mod.JobPrepError) as ctx:
+            self._run_ladder(passes=0)
+        self.assertIn("passes", str(ctx.exception))
+
+    def test_ladder_negative_geometry_raises(self):
+        # Guard the negative tail of each invariant too.
+        for kw in ({"length": -5.0}, {"pitch": -2.0}, {"passes": -1}):
+            with self.assertRaises(job_prep_mod.JobPrepError):
+                self._run_ladder(**kw)
+
+
 # ── attach_client frame parser (plan Step 9, unit bullets) ──────────────────
 
 _attach_script: list[str] = []

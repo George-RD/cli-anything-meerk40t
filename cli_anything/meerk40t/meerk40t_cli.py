@@ -7,6 +7,7 @@ import functools
 import hashlib
 import json
 import os
+import base64
 import sys
 from pathlib import Path
 from typing import Any
@@ -1306,6 +1307,28 @@ def _run_preflight(
             {"ok": False, "failures": [f"manifest unreadable: {exc}"]},
             2 if stage_mode else 1,
         )
+    if not isinstance(manifest, dict):
+        return (
+            {
+                "ok": False,
+                "failures": [
+                    f"manifest root must be a JSON object, got {type(manifest).__name__}"
+                ],
+            },
+            2 if stage_mode else 1,
+        )
+    schema = manifest.get("schema")
+    if schema != "clia-job-manifest-v1":
+        return (
+            {
+                "ok": False,
+                "failures": [
+                    f"unknown or missing manifest schema: {schema!r} "
+                    "(expected 'clia-job-manifest-v1')"
+                ],
+            },
+            2 if stage_mode else 1,
+        )
 
     is_ladder = manifest.get("kind") == "ladder"
     failures: list[str] = []
@@ -1356,23 +1379,80 @@ def _run_preflight(
             "recorded verification did not pass - regenerate with job prepare"
         )
 
-    estimated_roles = list(manifest.get("estimated_roles", []))
+    # 4. Estimated-role gate - derived from the TRUSTED material store, never
+    #    from the manifest's recorded estimated_roles (the manifest is an
+    #    artefact and is not trusted for provenance). Re-resolve settings for
+    #    (machine, material), restrict to the roles actually present in the
+    #    job operations, and treat any role whose provenance is not "tested"
+    #    as estimated. If this re-derivation disagrees with the recorded set,
+    #    the manifest has been tampered with.
+    ops = manifest.get("operations", []) or []
+    inverse_color_map = {
+        c.lower(): r for r, c in job_prep_mod.DEFAULT_COLOR_MAP.items()
+    }
+    present_roles: set[str] | None = set()
+    custom_map_unknown = False
+    for op in ops:
+        if not isinstance(op, dict):
+            continue
+        color = op.get("color")
+        if color is None:
+            continue
+        role = inverse_color_map.get(str(color).lower())
+        if role is not None:
+            present_roles.add(role)
+        else:
+            custom_map_unknown = True
+    if not present_roles and custom_map_unknown:
+        # A custom colour map prepared the job and we cannot map its colours
+        # back to roles; fall back to every resolved role rather than risk a
+        # false tamper rejection for a legitimate job.
+        present_roles = None
 
-    # 4. Estimated-role re-affirmation gate. This is the acknowledgeable exit-2
-    #    gate and takes precedence over hard failures so the operator is told
-    #    to acknowledge (or recalibrate) before anything else.
-    if estimated_roles and not allow_estimated:
+    recorded_estimated = set(manifest.get("estimated_roles", []) or [])
+    reevaluated_estimated: set[str] = set()
+    resolution_ok = False
+    mat = materials_mod.load_material(material) if material else None
+    if mat is not None:
+        try:
+            resolved = materials_mod.resolve_settings(mat, machine)
+            resolution_ok = True
+            for role, rset in resolved.items():
+                if present_roles is not None and role not in present_roles:
+                    continue
+                if rset.get("provenance") != "tested":
+                    reevaluated_estimated.add(role)
+        except ValueError:
+            # The machine has no entry for this material; step 2 already
+            # recorded a failure and this gate is moot.
+            pass
+
+    if resolution_ok and reevaluated_estimated != recorded_estimated:
+        return (
+            {
+                "ok": False,
+                "failures": [
+                    "manifest estimated_roles tampered: recorded "
+                    f"{sorted(recorded_estimated)} but the material store resolves "
+                    f"{sorted(reevaluated_estimated)}"
+                ],
+            },
+            2 if stage_mode else 1,
+        )
+
+    reevaluated_estimated_list = sorted(reevaluated_estimated)
+    if reevaluated_estimated_list and not allow_estimated:
         gate = list(failures)
         gate.append(
-            f"estimated roles {estimated_roles} require --allow-estimated"
+            f"estimated roles {reevaluated_estimated_list} require --allow-estimated"
         )
         return (
-            {"ok": False, "failures": gate, "estimated_roles": estimated_roles},
+            {"ok": False, "failures": gate, "estimated_roles": reevaluated_estimated_list},
             2,
         )
-    if estimated_roles:
+    if reevaluated_estimated_list:
         warnings.append(
-            f"estimated roles acknowledged under --allow-estimated: {estimated_roles}"
+            f"estimated roles acknowledged under --allow-estimated: {reevaluated_estimated_list}"
         )
 
     hard_exit = 2 if stage_mode else 1
@@ -1389,7 +1469,7 @@ def _run_preflight(
             "kind": manifest.get("kind", "job"),
             "machine": manifest.get("machine"),
             "material": manifest.get("material"),
-            "estimated_roles": estimated_roles,
+            "estimated_roles": reevaluated_estimated_list,
             "operations": manifest.get("operations", []),
             "warnings": warnings,
             "checklist": checklist,
@@ -1472,9 +1552,9 @@ def materials_create(ctx, name, description, machine):
 @click.argument("name")
 @click.option("--machine", "machine", required=True, help="Machine name.")
 @click.option("--role", "role", type=ROLE_CHOICES, required=True, help="Role to record (cut, score, etch).")
-@click.option("--power", "power", type=int, required=True, help="Laser power (S value, 1..1000).")
-@click.option("--speed", "speed", type=float, required=True, help="Feed rate in mm/s.")
-@click.option("--passes", "passes", type=int, required=True, help="Number of passes.")
+@click.option("--power", "power", type=click.IntRange(1, 1000), required=True, help="Laser power (S value, 1..1000).")
+@click.option("--speed", "speed", type=click.FloatRange(min=0, min_open=True), required=True, help="Feed rate in mm/s (>0).")
+@click.option("--passes", "passes", type=click.IntRange(1, None), required=True, help="Number of passes (>=1).")
 @click.option("--provenance", "provenance", type=PROVENANCE_CHOICES, required=True, help="tested (observed) or estimated (rationale).")
 @click.option("--note", "note", required=True, help="Evidence (tested) or rationale (estimated) for the setting.")
 @click.pass_context
@@ -1763,11 +1843,23 @@ def attach_stage(ctx, job_svg, manifest, allow_estimated):
         sys.stdout = _REAL_STDOUT
         ctx.exit(code)
 
-    err, stage_reply = _attach_send(ctx, f"agent stage {job_svg_abs}")
+    # Stage over the control channel. The recorded sha256 of the job SVG and a
+    # base64-encoded absolute path are two whitespace-free tokens, so a path
+    # containing spaces survives intact and the kernel re-verifies the staged
+    # bytes against the recorded hash before touching the scene.
+    files = manifest_data.get("files", {})
+    job_svg_entry = files.get("job_svg", {}) or {}
+    expected_sha = job_svg_entry.get("sha256")
+    b64_path = base64.b64encode(job_svg_abs.encode("utf-8")).decode("ascii")
+    err, stage_reply = _attach_send(ctx, f"agent stage {expected_sha} {b64_path}")
     if err is not None:
         _emit(ctx, err)
         sys.stdout = _REAL_STDOUT
         ctx.exit(1)
+    if isinstance(stage_reply, dict) and stage_reply.get("error") is not None:
+        _emit(ctx, {"ok": False, "failures": [stage_reply["error"]]})
+        sys.stdout = _REAL_STDOUT
+        ctx.exit(2)
 
     _emit(
         ctx,
@@ -1775,7 +1867,6 @@ def attach_stage(ctx, job_svg, manifest, allow_estimated):
             "staged": job_svg_abs,
             "manifest": str(mpath),
             "material": manifest_data.get("material"),
-            "estimated_roles": list(manifest_data.get("estimated_roles", [])),
             "operations": stage_reply.get("operations", manifest_data.get("operations", [])),
         },
     )

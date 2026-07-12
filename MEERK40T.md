@@ -179,8 +179,8 @@ talks to a running GUI kernel over the consoleserver control channel.
 
 ```bash
 # 1. Prepare: resolve settings from the material profile, write job SVG + G-code + manifest
-cli-anything-meerk40t --machine sculpfun-s9 job prepare design.svg \
-  --out-dir /tmp/j --material kraft-350gsm --json
+cli-anything-meerk40t --json --machine sculpfun-s9 job prepare design.svg \
+  --out-dir /tmp/j --material kraft-350gsm
 # exits 2 if any role is estimated; add --allow-estimated to acknowledge the risk
 
 # 2. Preflight: re-check file hashes and the settings fingerprint before staging

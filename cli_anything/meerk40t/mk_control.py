@@ -6,7 +6,7 @@ parsing prose or relying on command ordering.
 
 Commands registered:
   agent status
-  agent stage <path>
+  agent stage <expected_sha256> <base64-path>
 
 Every reply is one line::
 
@@ -17,6 +17,8 @@ from __future__ import annotations
 
 import json
 import os
+import base64
+import hashlib
 
 FRAME_PREFIX = "#CLIA1# "
 
@@ -40,7 +42,7 @@ def _register_agent_command(kernel):
             _reply(
                 channel,
                 {
-                    "error": "usage: agent status | agent stage <path>",
+                    "error": "usage: agent status | agent stage <expected_sha256> <base64-path>",
                 },
             )
             return
@@ -49,16 +51,16 @@ def _register_agent_command(kernel):
         if subcommand == "status":
             _reply(channel, _build_status(kernel))
         elif subcommand == "stage":
-            if len(args) < 2:
+            if len(args) < 3:
                 _reply(
                     channel,
                     {
-                        "error": "agent stage requires a file path",
+                        "error": "agent stage requires <expected_sha256> <base64-path>",
                     },
                 )
                 return
             try:
-                payload = _stage_file(kernel, args[1])
+                payload = _stage_file(kernel, args[2], expected_sha=args[1])
             except Exception as exc:  # noqa: BLE001
                 payload = {"error": str(exc)}
             _reply(channel, payload)
@@ -149,16 +151,53 @@ def _build_status(kernel):
         "spooler_queue": spooler_queue,
     }
 
+def _sha256_file(path: str) -> str | None:
+    """Return the sha256 hex digest of a file, or None if it cannot be read."""
+    h = hashlib.sha256()
+    try:
+        with open(path, "rb") as fh:
+            for chunk in iter(lambda: fh.read(8192), b""):
+                h.update(chunk)
+    except OSError:
+        return None
+    return h.hexdigest()
 
-def _stage_file(kernel, path):
-    path = os.path.abspath(os.path.expanduser(path))
+
+def _stage_file(kernel, b64_path, expected_sha=None):
+    # The CLI sends a base64-encoded absolute path as a single whitespace-free
+    # token so paths containing spaces survive intact over the console channel.
+    try:
+        raw = base64.b64decode(b64_path, validate=True)
+        path = os.path.abspath(os.path.expanduser(raw.decode("utf-8")))
+    except Exception as exc:
+        raise ValueError(f"invalid staged path encoding: {exc}")
     if not os.path.exists(path):
         raise FileNotFoundError(f"no such file: {path!r}")
 
-    # Clear the current scene using the same console operations the GUI path
-    # would use, then load the file via the canonical console loader.
-    kernel.console("element* delete\n")
-    kernel.console("operation* delete\n")
+    # Verify integrity IMMEDIATELY, before touching the scene, so a path whose
+    # bytes differ from the recorded hash cannot silently mis-stage. On mismatch
+    # we return an error frame and leave the scene untouched.
+    actual_sha = _sha256_file(path)
+    if actual_sha is None:
+        raise RuntimeError(f"cannot read staged file: {path!r}")
+    if expected_sha is not None and actual_sha != expected_sha:
+        return {
+            "error": (
+                f"staged file hash {actual_sha} does not match expected "
+                f"{expected_sha} - refusing to load scene"
+            )
+        }
+
+    # Load the file via the canonical console loader. We deliberately do NOT
+    # pre-clear the scene: the meerk40t project-SVG loader replaces the whole
+    # operations tree on each load (loading a second job yields that job's
+    # operations, not the union), so staging always leaves exactly the staged
+    # job's operations - which are the only nodes that burn. An explicit clear
+    # is both unnecessary and actively harmful here: on this MeerK40t build a
+    # clear (console `operation* delete` OR the elements-service
+    # `clear_elements_and_operations()`) corrupts loader state so every
+    # SUBSEQUENT load silently adds nothing. A hash mismatch still returns the
+    # error frame above without ever touching the scene.
     kernel.console(f"load {path}\n")
 
     elements = getattr(kernel, "elements", None)

@@ -112,6 +112,36 @@ def _build_ops(
         )
     return backend.ops()
 
+def _validate_settings_values(settings: dict[str, dict]) -> None:
+    """Reject out-of-range resolved role values before any kernel work.
+
+    Mirrors the material-record invariants enforced at the CLI: power is an
+    integer in 1..1000 inclusive, speed is strictly positive, passes is an
+    integer >= 1. A hand-edited material JSON must not reach the laser with a
+    value that would silently mis-drive the machine.
+    """
+    for role, s in settings.items():
+        power = s.get("power")
+        if (
+            not isinstance(power, int)
+            or isinstance(power, bool)
+            or power < 1
+            or power > 1000
+        ):
+            raise JobPrepError(
+                f"role {role!r} power {power!r} is outside the valid range 1..1000"
+            )
+        speed = s.get("speed")
+        if isinstance(speed, bool) or not isinstance(speed, (int, float)) or speed <= 0:
+            raise JobPrepError(
+                f"role {role!r} speed {speed!r} must be greater than zero"
+            )
+        passes = s.get("passes")
+        if not isinstance(passes, int) or isinstance(passes, bool) or passes < 1:
+            raise JobPrepError(
+                f"role {role!r} passes {passes!r} must be an integer >= 1"
+            )
+
 
 def _assign_elements_by_color(backend: Meerk40tBackend) -> tuple[dict[str, int], list[str]]:
     """Assign every loaded element to the operation matching its stroke colour.
@@ -329,6 +359,17 @@ def prepare_job(
                 f"material {material!r} has no {role!r} settings for machine {machine!r}; "
                 "run 'job ladder' on scrap, then 'materials record'"
             )
+    # Finding 9: a custom colour map names exactly the roles the operator wants
+    # processed. Drop any resolved role the map does not name BEFORE fingerprinting,
+    # deriving estimated roles, or building operations, so a three-role material
+    # used with `--map #ff0000=cut` yields only the cut op (and no KeyError).
+    mapped_roles = set(color_map.values())
+    settings = {role: s for role, s in settings.items() if role in mapped_roles}
+
+    # Finding 5: reject out-of-range resolved values before booting the kernel so
+    # a hand-edited material JSON cannot produce a mis-driven job.
+    _validate_settings_values(settings)
+
 
     estimated = [role for role, s in settings.items() if s.get("provenance") != "tested"]
     if estimated and not allow_estimated:
@@ -467,7 +508,14 @@ def _build_ladder_svg(powers: list[int], length: float, pitch: float) -> str:
 
 
 def _validate_ladder_params(
-    powers: list[int], speed: float, bed_width: float, bed_height: float
+    powers: list[int],
+    speed: float,
+    bed_width: float,
+    bed_height: float,
+    *,
+    length: float,
+    pitch: float,
+    passes: int,
 ) -> None:
     if not powers:
         raise JobPrepError("--powers must contain at least one power value")
@@ -476,6 +524,14 @@ def _validate_ladder_params(
             raise JobPrepError(f"power {p!r} is outside the valid range 1..1000")
     if speed <= 0:
         raise JobPrepError(f"speed {speed!r} must be greater than zero")
+    # Finding 8: ladder geometry must be positive before any file is written or
+    # the kernel is booted, so a bad length/pitch/passes cannot reach the laser.
+    if length <= 0:
+        raise JobPrepError(f"length {length!r} must be greater than zero")
+    if pitch <= 0:
+        raise JobPrepError(f"pitch {pitch!r} must be greater than zero")
+    if passes < 1:
+        raise JobPrepError(f"passes {passes!r} must be an integer >= 1")
     # Geometry starts at 10,10; lines extend length+10 right and 10+(n-1)*pitch down.
 
 
@@ -497,8 +553,11 @@ def prepare_ladder(
     same feed. Each line gets its own operation so the G-code's S values
     directly correspond to the requested powers.
     """
+
     bed_width, bed_height = _load_machine_bed(machine)
-    _validate_ladder_params(powers, speed, bed_width, bed_height)
+    _validate_ladder_params(
+        powers, speed, bed_width, bed_height, length=length, pitch=pitch, passes=passes
+    )
 
     max_y = 10.0 + (len(powers) - 1) * pitch
     if (10.0 + length) > bed_width or max_y > bed_height:

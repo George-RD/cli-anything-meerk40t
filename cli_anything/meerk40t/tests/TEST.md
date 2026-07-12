@@ -10,11 +10,11 @@ All tests are `unittest`-style cases collected and run by `pytest` (a `conftest.
 
 | File | Count | Scope |
 |------|-------|-------|
-| `tests/test_core.py` | 104 unit tests | Backend wrapper, project, elements, operations, session, export, device, serial/GRBL probe parsers, profile overlay, export guard, CLI device/machine command-suite wiring, packaged-skill integrity, materials loader, job-prep provenance, job manifest, and client-frame attachment.
+| `tests/test_core.py` | 113 unit tests | Backend wrapper, project, elements, operations, session, export, device, serial/GRBL probe parsers, profile overlay, export guard, CLI device/machine command-suite wiring, packaged-skill integrity, materials loader, job-prep provenance, job manifest, and client-frame attachment.
 | `tests/test_mk_plugin.py` | 15 unit tests | MeerK40t back-fill bridge plugin: behavioural upstream detection, `set` replacement, handover transforms, patch idempotence, runtime web-server patch. |
-| `tests/test_full_e2e.py` | 21 E2E tests | CLI subprocess workflows, backend round-trips, realistic laser-job scenarios, the smart-laser workflow (materials, job-prepare provenance gate, determinism, new-material lifecycle), and client-frame attach round-trips over a live consoleserver.
+| `tests/test_full_e2e.py` | 29 E2E tests | CLI subprocess workflows, backend round-trips, realistic laser-job scenarios, the smart-laser workflow (materials, job-prepare provenance gate, determinism, new-material lifecycle), and client-frame attach round-trips over a live consoleserver.
 
-Total: 119 unit + 21 E2E = 140 tests.
+Total: 128 unit + 29 E2E = 157 tests.
 
 Both test modules create fresh backends in `setUp` and tear them down in `tearDown`. E2E tests that exercise the installed CLI also fall back to `python -m cli_anything.meerk40t.meerk40t_cli` if the console script is not on `PATH`.
 
@@ -107,6 +107,12 @@ Both test modules create fresh backends in `setUp` and tear them down in `tearDo
 - `test_prose_only_raises_attacherror` - a message containing only prose with no frame raises AttachError.
 - `test_interleaved_noise_then_frame_parses` - a stream of interleaved noise followed by a valid frame still parses the frame correctly.
 
+### `TestJobPrepValidation` — job-prep input validation
+- `test_custom_map_single_role_no_keyerror` - a custom colour map naming one role prepares only that role's operation and never raises KeyError for the roles the map omits.
+- `test_custom_map_missing_role_raises` - a map naming a role the material lacks still raises MissingRoleError.
+- `test_out_of_range_power_raises` / `test_out_of_range_speed_raises` / `test_out_of_range_passes_raises` - resolved settings with power outside 1..1000, non-positive speed, or passes below 1 raise JobPrepError before the kernel boots.
+- `test_ladder_length_zero_raises` / `test_ladder_pitch_zero_raises` / `test_ladder_passes_zero_raises` / `test_ladder_negative_geometry_raises` - ladder geometry with non-positive length, pitch, or passes is rejected before any file is written.
+
 ---
 
 ## 3. E2E Test Plan (`test_full_e2e.py`)
@@ -137,8 +143,15 @@ All tests use the helper `_resolve_cli("cli-anything-meerk40t")`, which returns 
 
 ### `TestAttachRoundTrip` — client-frame attach round-trips
 - `test_attach_status_live` - attach status reports protocol 1 over a live consoleserver bound to a free ephemeral port.
-- `test_attach_stage_live` - attach staging over the live consoleserver inventories three operations.
+- `test_attach_stage_live` - attach staging over the live consoleserver loads the job and inventories at least one operation.
 - `test_attach_status_closed` - attach status returns a no-frame error when the consoleserver port is closed.
+
+### `TestPR24Findings` — review hardening (PR #24)
+- `test_preflight_tampered_estimated_roles_rejected` - a manifest whose `estimated_roles` was edited to hide an estimated role is rejected; the gate is re-derived from the material store, not the manifest field.
+- `test_preflight_bad_schema_structured_error` - a non-object or wrong-schema manifest produces a structured `--json` failure, never a traceback.
+- `test_materials_record_out_of_range_rejected` - `materials record` rejects power outside 1..1000, non-positive speed, and passes below 1.
+- `test_agent_stage_hash_mismatch_refused` - a staged file whose bytes differ from the recorded hash returns an error frame and leaves the scene unchanged.
+- `test_attach_stage_path_with_space` - a job path containing spaces stages cleanly through the base64 wire format.
 
 ---
 
@@ -149,8 +162,8 @@ detection, console `set` replacement (typed values, feedback, `-p` path flag),
 console/web server handover transforms, patch idempotence and failure
 isolation, the `bridge_status` console command, and the runtime web-server
 patch against a real temp module.
-Together with `test_core.py` (104) this makes 119 unit tests; `test_full_e2e.py`
-adds 21 E2E tests (140 total).
+Together with `test_core.py` (113) this makes 128 unit tests; `test_full_e2e.py`
+adds 29 E2E tests (157 total).
 
 ## 4. Realistic Workflow Scenarios
 
@@ -186,7 +199,7 @@ adds 21 E2E tests (140 total).
 ```
 $ .venv/bin/python -m pytest cli_anything/meerk40t/tests/test_core.py -v
 
-104 passed in ~4.2s
+113 passed in ~4.2s
 
 OK
 ```
@@ -223,12 +236,12 @@ All unit tests passed (current inventory above):
 ```
 $ .venv/bin/python -m pytest cli_anything/meerk40t/tests/test_full_e2e.py -v
 
-21 passed in ~16s
+29 passed in ~22s
 
 OK
 ```
 
-All 21 E2E tests passed:
+All 29 E2E tests passed:
 - TestCLISubprocess: 10 tests (help, project_new_json, elements_circle_json, elements_rect_stroke_fill, elements_list, export_svg, console_passthrough, persistence, elements_transformations_cli, operations_management_cli) via the installed `cli-anything-meerk40t` command
 - TestBackendE2E: 3 tests (gcode_export_with_grbl, svg_round_trip, full_workflow)
 - TestSmartLaserWorkflow: 5 tests (materials_list_and_show, job_prepare_gate, determinism_swap, new_material_lifecycle, attach_ignores_global_project_and_skips_kernel) covering the provenance gate, deterministic material swap, new-material calibration lifecycle, and the attach backend-skip guarantee
@@ -238,10 +251,10 @@ All 21 E2E tests passed:
 
 | Suite | Tests | Passed | Failed | Time |
 |---|---|---|---|---|
-| test_core | 104 | 104 | 0 | 4.2s |
+| test_core | 113 | 113 | 0 | 4.2s |
 | test_mk_plugin | 15 | 15 | 0 | 0.12s |
-| test_full_e2e | 21 | 21 | 0 | 16.0s |
-| **Total** | **140** | **140** | **0** | **~20s** |
+| test_full_e2e | 29 | 29 | 0 | 22.0s |
+| **Total** | **157** | **157** | **0** | **~27s** |
 
 Pass rate: 100%
 
