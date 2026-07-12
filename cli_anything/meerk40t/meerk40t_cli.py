@@ -1379,13 +1379,15 @@ def _run_preflight(
             "recorded verification did not pass - regenerate with job prepare"
         )
 
-    # 4. Estimated-role gate - derived from the TRUSTED material store, never
-    #    from the manifest's recorded estimated_roles. The roles that actually
-    #    burn are recorded per-operation (and are hash-locked through the gcode
-    #    verified in step 1), so we re-resolve their provenance from the
-    #    material store and treat any non-"tested" role as estimated. A
-    #    disagreement with the recorded set means the manifest was tampered
-    #    with. Ladder manifests carry no roles, so the gate does not apply.
+    # 4. Estimated-role gate - provenance comes from the TRUSTED material store,
+    #    never from the manifest's recorded estimated_roles. We take the set of
+    #    roles the job processed from the manifest operations, re-resolve their
+    #    provenance from the material store, and treat any non-"tested" role as
+    #    estimated. A disagreement with the recorded estimated_roles means the
+    #    manifest was tampered with. (The manifest is attacker-editable, so this
+    #    detects casual edits, not a forged manifest that changes operations and
+    #    estimated_roles together; the material store remains the trust root.)
+    #    Ladder manifests carry no roles, so the gate does not apply.
     reevaluated_estimated: set[str] = set()
     if not is_ladder:
         ops = manifest.get("operations", []) or []
