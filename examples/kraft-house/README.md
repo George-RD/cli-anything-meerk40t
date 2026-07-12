@@ -16,8 +16,8 @@ When folded, the footprint is 100 mm × 80 mm. The height to the ridge is about 
 ## Files
 
 - `house_a3.svg`: the cut file. Three layers keyed by stroke colour.
-- `generate.py`: makes the SVG and checks its own geometry. Run with `python3 designs/kraft-house/generate.py`.
-- `prepare_job.py`: builds a MeerK40t job and G-code from the SVG. Run with the repo venv: `.venv/bin/python designs/kraft-house/prepare_job.py designs/kraft-house/house_a3.svg --out-dir designs/kraft-house/output --json`.
+- `generate.py`: makes the SVG and checks its own geometry. Run with `python3 examples/kraft-house/generate.py`.
+- `prepare_job.py`: builds a MeerK40t job and G-code from the SVG. Run with the repo venv: `.venv/bin/python examples/kraft-house/prepare_job.py examples/kraft-house/house_a3.svg --out-dir examples/kraft-house/output --json`.
 - `output/house_a3_job.svg` and `output/house_a3.gcode`: prepared job artefacts. Regenerate them after any change to the SVG.
 
 Window frames are etched 1.5 mm outside each opening. The door sits left of centre with both front windows to its right, so no cut lines touch each other.
