@@ -39,8 +39,10 @@ from __future__ import annotations
 
 import inspect
 import re
+import sys
 import textwrap
 
+from cli_anything.meerk40t import mk_control
 from meerk40t.kernel import _
 
 # Upstream pull request that introduces these fixes permanently.
@@ -477,6 +479,17 @@ def plugin(kernel, lifecycle=None):
         kernel._cli_anything_mk_loaded = True
         if lifecycle in ("preregister", "register", "boot", "postboot", "start"):
             apply_backfill_patches(kernel)
+            try:
+                mk_control.register(kernel)
+            except Exception as exc:
+                message = (
+                    f"cli_anything meerk40t: failed to register control commands: {exc}"
+                )
+                channel = _get_channel(kernel)
+                if channel is not None:
+                    channel(message)
+                else:
+                    print(message, file=sys.stderr)
     except Exception:
         # A failure here must never break kernel boot.
         pass

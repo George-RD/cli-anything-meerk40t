@@ -7,6 +7,7 @@ frameworks are required; only the standard library unittest is used.
 from __future__ import annotations
 
 import os
+import sys
 import json
 import shutil
 import tempfile
@@ -28,7 +29,6 @@ import cli_anything.meerk40t.meerk40t_cli as cli_mod
 from cli_anything.meerk40t.utils import submit as submit_mod
 import urllib.parse
 import subprocess
-
 
 class BackendTestCase(unittest.TestCase):
     """Base class that creates and tears down a fresh backend per test."""
@@ -1319,6 +1319,505 @@ class TestSkillPackaging(unittest.TestCase):
             if os.path.isfile(canonical):
                 with open(canonical, "rb") as a, open(path, "rb") as b:
                     self.assertEqual(a.read(), b.read(), rel)
+
+
+# ── Smart laser workflow unit tests (plan Step 9) ───────────────────────────
+
+from cli_anything.meerk40t.utils import materials as materials_mod
+from cli_anything.meerk40t.utils import job_prep as job_prep_mod
+from cli_anything.meerk40t.utils.attach_client import (
+    send as attach_send,
+    AttachError,
+    FRAME_PREFIX,
+)
+import socketserver
+import threading
+
+
+class JobFixtureTestCase(unittest.TestCase):
+    """Helpers: a tiny red SVG + a cut-only estimated material fixture (tmp home)."""
+
+    def _make_red_svg(self, path: str) -> None:
+        svg = (
+            '<svg xmlns="http://www.w3.org/2000/svg" width="50mm" height="50mm" '
+            'viewBox="0 0 50 50">\n'
+            '  <rect x="5" y="5" width="30" height="30" '
+            'stroke="#ff0000" fill="none" stroke-width="1"/>\n'
+            '</svg>\n'
+        )
+        with open(path, "w", encoding="utf-8") as fh:
+            fh.write(svg)
+
+    def _make_cut_material(self, name: str, config_home: str) -> None:
+        data = {
+            "name": name,
+            "description": "fixture material (cut only, estimated)",
+            "machines": {
+                "sculpfun-s9": {
+                    "roles": {
+                        "cut": {
+                            "kind": "cut",
+                            "passes": 1,
+                            "power": 650,
+                            "speed": 16.0,
+                            "provenance": "estimated",
+                            "note": "fixture estimate",
+                        }
+                    }
+                }
+            },
+        }
+        materials_mod.save_user_material(name, data, config_home=config_home)
+
+
+class TestMaterialsLoader(unittest.TestCase):
+    """Bundled materials load; user overrides win; unknown machine rejected."""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp(prefix="mk_mat_")
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def test_bundled_kraft_loads(self):
+        mat = materials_mod.load_material("kraft-350gsm")
+        self.assertIsNotNone(mat)
+        self.assertEqual(mat["name"], "kraft-350gsm")
+        roles = materials_mod.resolve_settings(mat, "sculpfun-s9")
+        self.assertIn("cut", roles)
+        self.assertIn("score", roles)
+        self.assertIn("etch", roles)
+        # Only score is operator-confirmed tested in the bundled record.
+        self.assertEqual(roles["score"]["provenance"], "tested")
+
+    def test_user_override_wins(self):
+        override = {
+            "name": "kraft-350gsm",
+            "description": "user override",
+            "machines": {
+                "sculpfun-s9": {
+                    "roles": {
+                        "cut": {
+                            "kind": "cut",
+                            "passes": 1,
+                            "power": 999,
+                            "speed": 10.0,
+                            "provenance": "estimated",
+                            "note": "override",
+                        }
+                    }
+                }
+            },
+        }
+        materials_mod.save_user_material("kraft-350gsm", override, config_home=self.tmp)
+        mat = materials_mod.load_material("kraft-350gsm", config_home=self.tmp)
+        self.assertEqual(mat["description"], "user override")
+        roles = materials_mod.resolve_settings(mat, "sculpfun-s9")
+        self.assertEqual(roles["cut"]["power"], 999)
+
+    def test_resolve_settings_unknown_machine_raises(self):
+        mat = materials_mod.load_material("kraft-350gsm")
+        with self.assertRaises(ValueError):
+            materials_mod.resolve_settings(mat, "ghost-machine")
+
+
+class TestJobPrepProvenance(JobFixtureTestCase):
+    """The provenance gate blocks estimated settings until acknowledged."""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp(prefix="mk_prep_")
+        self.out = tempfile.mkdtemp(prefix="mk_out_")
+        self.mat_name = "cut-est-fixture"
+        self._make_cut_material(self.mat_name, self.tmp)
+        self.svg = os.path.join(self.tmp, "design.svg")
+        self._make_red_svg(self.svg)
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp, ignore_errors=True)
+        shutil.rmtree(self.out, ignore_errors=True)
+
+    def test_estimated_cut_raises_without_allow(self):
+        # The gate fires before the kernel starts, so no backend boot happens.
+        with self.assertRaises(job_prep_mod.UncalibratedSettingsError) as ctx:
+            job_prep_mod.prepare_job(
+                self.svg,
+                self.out,
+                machine="sculpfun-s9",
+                material=self.mat_name,
+                color_map={"#ff0000": "cut"},
+                allow_estimated=False,
+                config_home=self.tmp,
+            )
+        self.assertIn("cut", ctx.exception.estimated_roles)
+
+    def test_estimated_cut_passes_with_allow(self):
+        summary = job_prep_mod.prepare_job(
+            self.svg,
+            self.out,
+            machine="sculpfun-s9",
+            material=self.mat_name,
+            color_map={"#ff0000": "cut"},
+            allow_estimated=True,
+            config_home=self.tmp,
+        )
+        self.assertEqual(summary["estimated_roles"], ["cut"])
+        self.assertTrue(os.path.exists(summary["manifest"]))
+
+
+class TestJobManifest(JobFixtureTestCase):
+    """prepare_job writes a verifiable manifest; preflight rejects tampering."""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp(prefix="mk_man_")
+        self.out = tempfile.mkdtemp(prefix="mk_manout_")
+        self.mat_name = "cut-est-fixture"
+        self._make_cut_material(self.mat_name, self.tmp)
+        self.svg = os.path.join(self.tmp, "design.svg")
+        self._make_red_svg(self.svg)
+        self.summary = job_prep_mod.prepare_job(
+            self.svg,
+            self.out,
+            machine="sculpfun-s9",
+            material=self.mat_name,
+            color_map={"#ff0000": "cut"},
+            allow_estimated=True,
+            config_home=self.tmp,
+        )
+        self.manifest_path = self.summary["manifest"]
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp, ignore_errors=True)
+        shutil.rmtree(self.out, ignore_errors=True)
+
+    def test_manifest_written_and_hashes_verify(self):
+        with open(self.manifest_path, encoding="utf-8") as fh:
+            manifest = json.loads(fh.read())
+        self.assertEqual(manifest["schema"], "clia-job-manifest-v1")
+        for fname in ("input_svg", "job_svg", "gcode"):
+            entry = manifest["files"][fname]
+            actual = cli_mod._sha256_file(entry["path"])
+            self.assertEqual(actual, entry["sha256"], fname)
+
+    def test_preflight_rejects_tampered_gcode(self):
+        # Point preflight's material lookup at our tmp config home.
+        prev = os.environ.get("CLI_ANYTHING_CONFIG_HOME")
+        os.environ["CLI_ANYTHING_CONFIG_HOME"] = self.tmp
+        try:
+            with open(self.manifest_path, encoding="utf-8") as fh:
+                gcode_path = json.loads(fh.read())["files"]["gcode"]["path"]
+            with open(gcode_path, "a", encoding="utf-8") as fh:
+                fh.write("; tampered\n")
+            result, code = cli_mod._run_preflight(
+                self.manifest_path, allow_estimated=True
+            )
+        finally:
+            if prev is None:
+                os.environ.pop("CLI_ANYTHING_CONFIG_HOME", None)
+            else:
+                os.environ["CLI_ANYTHING_CONFIG_HOME"] = prev
+        self.assertFalse(result["ok"])
+        self.assertNotEqual(code, 0)
+        self.assertTrue(
+            any("gcode hash mismatch" in f for f in result["failures"]),
+            result["failures"],
+        )
+
+
+class TestJobPrepValidation(JobFixtureTestCase):
+    """Findings 5, 8, 9: value/geometry validation and custom-map role filtering."""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp(prefix="mk_jpv_")
+        self.out = tempfile.mkdtemp(prefix="mk_jpvout_")
+        self.svg = os.path.join(self.tmp, "design.svg")
+        self._make_red_svg(self.svg)
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp, ignore_errors=True)
+        shutil.rmtree(self.out, ignore_errors=True)
+
+    def _make_3role_material(self, name, config_home, *, cut_provenance="estimated"):
+        data = {
+            "name": name,
+            "description": "fixture 3-role material",
+            "machines": {
+                "sculpfun-s9": {
+                    "roles": {
+                        "etch": {
+                            "kind": "engrave", "passes": 1, "power": 300,
+                            "speed": 40.0, "provenance": "tested", "note": "f",
+                        },
+                        "score": {
+                            "kind": "engrave", "passes": 1, "power": 250,
+                            "speed": 30.0, "provenance": "tested", "note": "f",
+                        },
+                        "cut": {
+                            "kind": "cut", "passes": 1, "power": 650,
+                            "speed": 16.0, "provenance": cut_provenance, "note": "f",
+                        },
+                    }
+                }
+            },
+        }
+        materials_mod.save_user_material(name, data, config_home=config_home)
+
+    def _make_value_material(self, name, config_home, *, power=650, speed=16.0, passes=1):
+        data = {
+            "name": name,
+            "description": "fixture value material",
+            "machines": {
+                "sculpfun-s9": {
+                    "roles": {
+                        "cut": {
+                            "kind": "cut", "passes": passes, "power": power,
+                            "speed": speed, "provenance": "tested", "note": "f",
+                        }
+                    }
+                }
+            },
+        }
+        materials_mod.save_user_material(name, data, config_home=config_home)
+
+    def test_custom_map_single_role_no_keyerror(self):
+        # Finding 9: a three-role material with a single-role custom map must
+        # produce exactly one op (cut) and limit estimated_roles to that role.
+        name = "three-role-fixture"
+        self._make_3role_material(name, self.tmp, cut_provenance="estimated")
+        summary = job_prep_mod.prepare_job(
+            self.svg, self.out,
+            machine="sculpfun-s9", material=name,
+            color_map={"#ff0000": "cut"}, allow_estimated=True,
+            config_home=self.tmp,
+        )
+        self.assertEqual(len(summary["operations"]), 1)
+        self.assertEqual(summary["operations"][0]["kind"], "cut")
+        self.assertEqual(summary["estimated_roles"], ["cut"])
+
+    def test_custom_map_missing_role_raises(self):
+        # Finding 9: a role named in the map that the material lacks still
+        # raises MissingRoleError.
+        name = "three-role-fixture"
+        self._make_3role_material(name, self.tmp)
+        with self.assertRaises(job_prep_mod.MissingRoleError):
+            job_prep_mod.prepare_job(
+                self.svg, self.out,
+                machine="sculpfun-s9", material=name,
+                color_map={"#ff0000": "engrave"}, allow_estimated=True,
+                config_home=self.tmp,
+            )
+
+    def test_out_of_range_power_raises(self):
+        # Finding 5: power outside 1..1000 is rejected before the kernel boots.
+        name = "bad-power"
+        self._make_value_material(name, self.tmp, power=5000)
+        with self.assertRaises(job_prep_mod.JobPrepError) as ctx:
+            job_prep_mod.prepare_job(
+                self.svg, self.out,
+                machine="sculpfun-s9", material=name,
+                color_map={"#ff0000": "cut"}, config_home=self.tmp,
+            )
+        self.assertIn("power", str(ctx.exception))
+
+    def test_out_of_range_speed_raises(self):
+        name = "bad-speed"
+        self._make_value_material(name, self.tmp, speed=0.0)
+        with self.assertRaises(job_prep_mod.JobPrepError) as ctx:
+            job_prep_mod.prepare_job(
+                self.svg, self.out,
+                machine="sculpfun-s9", material=name,
+                color_map={"#ff0000": "cut"}, config_home=self.tmp,
+            )
+        self.assertIn("speed", str(ctx.exception))
+
+    def test_out_of_range_passes_raises(self):
+        name = "bad-passes"
+        self._make_value_material(name, self.tmp, passes=0)
+        with self.assertRaises(job_prep_mod.JobPrepError) as ctx:
+            job_prep_mod.prepare_job(
+                self.svg, self.out,
+                machine="sculpfun-s9", material=name,
+                color_map={"#ff0000": "cut"}, config_home=self.tmp,
+            )
+        self.assertIn("passes", str(ctx.exception))
+
+    def _run_ladder(self, **overrides):
+        kwargs = dict(
+            out_dir=self.out, machine="sculpfun-s9", role="cut",
+            powers=[100, 200], speed=16.0, passes=1, length=20.0, pitch=6.0,
+        )
+        kwargs.update(overrides)
+        return job_prep_mod.prepare_ladder(**kwargs)
+
+    def test_ladder_length_zero_raises(self):
+        # Finding 8: non-positive length is rejected before writing files.
+        with self.assertRaises(job_prep_mod.JobPrepError) as ctx:
+            self._run_ladder(length=0.0)
+        self.assertIn("length", str(ctx.exception))
+
+    def test_ladder_pitch_zero_raises(self):
+        with self.assertRaises(job_prep_mod.JobPrepError) as ctx:
+            self._run_ladder(pitch=0.0)
+        self.assertIn("pitch", str(ctx.exception))
+
+    def test_ladder_passes_zero_raises(self):
+        with self.assertRaises(job_prep_mod.JobPrepError) as ctx:
+            self._run_ladder(passes=0)
+        self.assertIn("passes", str(ctx.exception))
+
+    def test_ladder_negative_geometry_raises(self):
+        # Guard the negative tail of each invariant too.
+        for kw in ({"length": -5.0}, {"pitch": -2.0}, {"passes": -1}):
+            with self.assertRaises(job_prep_mod.JobPrepError):
+                self._run_ladder(**kw)
+
+
+# ── attach_client frame parser (plan Step 9, unit bullets) ──────────────────
+
+_attach_script: list[str] = []
+
+
+class _AttachHandler(socketserver.StreamRequestHandler):
+    def handle(self):
+        # Wait for the client's command line so any pre-frame noise the client
+        # drains does not shadow the framed reply.
+        try:
+            self.rfile.readline()
+        except OSError:
+            return
+        for line in _attach_script:
+            self.wfile.write((line + "\n").encode("utf-8"))
+        self.wfile.flush()
+
+
+def _start_attach_server(script: list[str]):
+    global _attach_script
+    _attach_script = script
+    server = socketserver.ThreadingTCPServer(("127.0.0.1", 0), _AttachHandler)
+    port = server.server_address[1]
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    return server, port
+
+
+class TestAttachClientFrame(unittest.TestCase):
+    """The framed reply parser: valid frame, prose-only refusal, noise+frame."""
+
+    def setUp(self):
+        self.servers = []
+
+    def tearDown(self):
+        for srv in self.servers:
+            srv.shutdown()
+            srv.server_close()
+
+    def _serve(self, script):
+        srv, port = _start_attach_server(script)
+        self.servers.append(srv)
+        return port
+
+    def test_valid_frame_parses(self):
+        payload = json.dumps({"protocol": 1, "devices": ["sculpfun-s9"]})
+        port = self._serve([FRAME_PREFIX + payload])
+        reply = attach_send("127.0.0.1", port, "agent status", timeout=2.0)
+        self.assertEqual(reply, {"protocol": 1, "devices": ["sculpfun-s9"]})
+
+    def test_prose_only_raises_attacherror(self):
+        port = self._serve(["kernel banner line", "warning: warming up"])
+        with self.assertRaises(AttachError):
+            attach_send("127.0.0.1", port, "agent status", timeout=1.0)
+
+    def test_interleaved_noise_then_frame_parses(self):
+        payload = json.dumps({"protocol": 1, "elements": 3})
+        port = self._serve(
+            ["noisy startup log", "info: channel open", FRAME_PREFIX + payload]
+        )
+        reply = attach_send("127.0.0.1", port, "agent status", timeout=2.0)
+        self.assertEqual(reply, {"protocol": 1, "elements": 3})
+
+class TestStageFileScene(unittest.TestCase):
+    """`mk_control._stage_file` against a real backend: load, replace, refuse.
+
+    This is the authoritative coverage for the attach-stage scene contract
+    (PR #24 findings 3+4). The consoleserver E2E harness boots a partial kernel
+    that does not register the job loader, so scene behaviour is verified here
+    against Meerk40tBackend, which loads jobs exactly as a running GUI does.
+    """
+
+    def setUp(self):
+        import base64 as _b64
+        import hashlib as _hl
+        import cli_anything.meerk40t.mk_control as _mkc
+        self._b64 = _b64
+        self._hl = _hl
+        self._mkc = _mkc
+        self.temp_dir = tempfile.mkdtemp(prefix="mk_stage_")
+        self.backend = Meerk40tBackend()
+        self.backend.start()
+
+    def tearDown(self):
+        self.backend.shutdown()
+        shutil.rmtree(self.temp_dir, ignore_errors=True)
+
+    def _make_job(self):
+        d = tempfile.mkdtemp(dir=self.temp_dir)
+        svg = os.path.join(d, "in.svg")
+        with open(svg, "w", encoding="utf-8") as fh:
+            fh.write(
+                '<svg xmlns="http://www.w3.org/2000/svg" width="50mm" '
+                'height="50mm" viewBox="0 0 50 50">'
+                '<rect x="1" y="1" width="10" height="10" fill="none" stroke="#ff0000"/>'
+                '<rect x="1" y="15" width="10" height="10" fill="none" stroke="#0000ff"/>'
+                '<rect x="1" y="30" width="10" height="10" fill="none" stroke="#000000"/>'
+                "</svg>"
+            )
+        return job_prep_mod.prepare_job(
+            svg, d, machine="sculpfun-s9", material="kraft-350gsm",
+            allow_estimated=True,
+        )["job_svg"]
+
+    def _sha(self, path):
+        h = self._hl.sha256()
+        with open(path, "rb") as fh:
+            h.update(fh.read())
+        return h.hexdigest()
+
+    def _b64path(self, path):
+        return self._b64.b64encode(os.path.abspath(path).encode("utf-8")).decode("ascii")
+
+    def _stage(self, path, sha):
+        return self._mkc._stage_file(self.backend.kernel, self._b64path(path), expected_sha=sha)
+
+    def test_stage_loads_job(self):
+        job = self._make_job()
+        reply = self._stage(job, self._sha(job))
+        self.assertIsNone(reply.get("error"))
+        self.assertEqual(reply["elements"], 3)
+        self.assertEqual(len(reply["operations"]), 3)
+
+    def test_stage_replaces_scene_no_accumulation(self):
+        job_a = self._make_job()
+        job_b = self._make_job()
+        first = self._stage(job_a, self._sha(job_a))
+        second = self._stage(job_b, self._sha(job_b))
+        # The second stage must REPLACE, not accumulate: staging two jobs still
+        # leaves exactly one job's operations and elements in the scene.
+        self.assertEqual(second["elements"], first["elements"])
+        self.assertEqual(len(second["operations"]), len(first["operations"]))
+        self.assertEqual(second["elements"], 3)
+
+    def test_stage_hash_mismatch_refused_scene_untouched(self):
+        job = self._make_job()
+        self._stage(job, self._sha(job))
+        el = self.backend.kernel.elements
+        before_ops = len(list(el.ops()))
+        before_elems = len(list(el.elems()))
+        # A wrong expected hash must return an error frame and leave the scene
+        # untouched (nothing loaded, nothing removed).
+        reply = self._stage(job, "0" * 64)
+        self.assertIn("error", reply)
+        self.assertIn("hash", reply["error"].lower())
+        self.assertEqual(len(list(el.ops())), before_ops)
+        self.assertEqual(len(list(el.elems())), before_elems)
 
 
 if __name__ == "__main__":

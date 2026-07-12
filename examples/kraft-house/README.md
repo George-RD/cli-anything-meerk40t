@@ -18,7 +18,7 @@ When folded, the footprint is 100 mm × 80 mm. The height to the ridge is about 
 - `house_a3.svg`: the cut file. Three layers keyed by stroke colour.
 - `generate.py`: makes the SVG and checks its own geometry. Run with `python3 examples/kraft-house/generate.py`.
 - `prepare_job.py`: builds a MeerK40t job and G-code from the SVG. Run with the repo venv: `.venv/bin/python examples/kraft-house/prepare_job.py examples/kraft-house/house_a3.svg --out-dir examples/kraft-house/output --json`.
-- `output/house_a3_job.svg` and `output/house_a3.gcode`: prepared job artefacts. Regenerate them after any change to the SVG.
+- `output/house_a3_job.svg`, `output/house_a3.gcode`, and `output/house_a3_manifest.json`: prepared job artefacts (the manifest records file hashes, the material profile, and a settings fingerprint). Regenerate them after any change to the SVG.
 
 Window frames are etched 1.5 mm outside each opening. The door sits left of centre with both front windows to its right, so no cut lines touch each other.
 
@@ -43,16 +43,21 @@ The laser burns a shallow crease. The card folds away from the lasered face, so 
 
 ## Laser settings
 
-These are calibration starting points only. They are not guaranteed to cut this batch of card. Test them on a scrap piece of the same card first.
+These settings come from the bundled `kraft-350gsm` material profile, which the
+`job prepare` command and this example wrapper both consume. Inspect them with:
 
-| Layer | Operation | Passes | Power (S) | Speed |
-| --- | --- | --- | --- | --- |
-| `cut` red #FF0000 | cut | 3 | 950 | 6 mm/s |
-| `score` blue #0000FF | engrave | 1 | 280 | 20 mm/s |
-| `etch` black #000000 | engrave | 1 | 380 | 40 mm/s |
+    cli-anything-meerk40t materials show kraft-350gsm --machine sculpfun-s9
+
+They are calibration starting points, not a guarantee for this batch of card. Test
+them on a scrap piece of the same card first.
+
+| Layer | Operation | Passes | Power (S) | Speed | Status |
+| --- | --- | --- | --- | --- | --- |
+| `cut` red #FF0000 | cut | 1 | 650 | 16 mm/s | estimated - ladder required |
+| `score` blue #0000FF | engrave | 1 | 280 | 20 mm/s | tested |
+| `etch` black #000000 | engrave | 1 | 380 | 40 mm/s | estimated - ladder required |
 
 Before you cut the full sheet, run a small test square on scrap. Check that the cut goes through cleanly, the score creases without tearing, and the etch is the right darkness. Then run the full job.
-
 ## Sheet placement
 
 The sheet is true A3, 420 mm × 297 mm, laid landscape. The example machine (Sculpfun S9) has 410 mm × 400 mm of travel. The sheet is 10 mm wider than the travel, so it cannot fit fully inside the working area.

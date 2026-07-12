@@ -49,3 +49,16 @@ on them.
 | Machine | Material | Test | Observation | Limits |
 |---|---|---|---|---|
 | Sculpfun S9 (5.5W diode) | 350gsm kraft card | 10/15/20% ladder at 1500 mm/min, vector engrave (2026-07) | All three visible, monotonic intensity increase | Single burn; relative intensity only; repeatability and grayscale linearity untested |
+| Sculpfun S9 (5.5W diode) | 350gsm kraft card (kraft-house) | full burn 2026-07-12: score 280/20, etch 380/40, cut 950x3 @6mm/s | score crease strength good (operator-confirmed); etch rendered but quality not assessed by operator; cut over-delivered, kerf retraced | cut-through threshold still uncalibrated; etch quality unassessed |
+
+## Machine-readable profiles
+
+The JSON store under `cli_anything/meerk40t/materials/` (plus per-user
+overrides) is the source of truth consumed by `job prepare`. Use
+`materials list` to see every available profile, `materials show <name>
+--machine <m>` to inspect a profile's roles and settings, and
+`materials record <name> --machine <m> --role <r> --power <p> --speed <s>
+--passes <n> --provenance {tested,estimated} --note <text>` to add or
+update a calibrated role. This file is the narrative log that explains the
+observed results behind those numbers; the CLI reads the JSON, not this
+document.

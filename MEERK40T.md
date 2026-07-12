@@ -54,15 +54,18 @@ kernel instance (the same code path as `meerk40t -z`) and drives it via
 
 ## CLI Command Groups
 
-1. `project` — new, open, save, info, close (SVG project files)
-2. `elements` — add shapes (circle, rect, line, text, etc.), list, select, delete, translate, scale, rotate, align, group, ungroup
-3. `operations` — list/add/set cut/engrave/raster/image ops, classify elements, delete, clear
-4. `device` — list, status, home, physical-home, move, info, connect, disconnect, detect, check, jog, goto, frame, setup (driver via top-level `--device`/`--port`/`--baud`, or `--machine PROFILE`)
-5. `machine` — list profiles (bundled and user, with origin)
-6. `export` — render SVG/PNG/DXF via the real backend
-7. `console` — pass-through to the raw kernel console (escape hatch)
-8. `session` — undo, redo, history, status
-9. `repl` — interactive stateful shell (default when no subcommand)
+ 1. `project`: new, open, save, info, close (SVG project files)
+ 2. `elements`: add shapes (circle, rect, line, text, etc.), list, select, delete, translate, scale, rotate, align, group, ungroup
+ 3. `operations`: list/add/set cut/engrave/raster/image ops, classify elements, delete, clear
+ 4. `device`: list, status, home, physical-home, move, info, connect, disconnect, detect, check, jog, goto, frame, setup (driver via top-level `--device`/`--port`/`--baud`, or `--machine PROFILE`)
+ 5. `machine`: list profiles (bundled and user, with origin)
+ 6. `materials`: list, show, create, record (calibrated laser settings per machine)
+ 7. `job`: prepare (material-driven job SVG + G-code + manifest), preflight (re-verify a manifest), ladder (calibration pattern on scrap)
+ 8. `export`: render SVG/PNG/DXF via the real backend
+ 9. `console`: pass-through to the raw kernel console (escape hatch)
+ 10. `session`: undo, redo, history, status
+ 11. `repl`: interactive stateful shell (default when no subcommand)
+ 12. `attach`: status (query a running GUI kernel), stage (verify a manifest, then load the job SVG on the live kernel)
 
 ## Output Format
 
@@ -168,6 +171,33 @@ There is no dedicated burn subcommand. Run the job through the console passthrou
 `cli-anything-meerk40t console 'plan default copy preprocess blob spool'`
 
 (The meerk40t `spool` command runs a prepared plan on the live device.)
+## Material-driven job preparation
+
+Settings are resolved from a material profile rather than hand-typed per job.
+The prepare and preflight steps need no serial link; only `attach stage`
+talks to a running GUI kernel over the consoleserver control channel.
+
+```bash
+# 1. Prepare: resolve settings from the material profile, write job SVG + G-code + manifest
+cli-anything-meerk40t --json --machine sculpfun-s9 job prepare design.svg \
+  --out-dir /tmp/j --material kraft-350gsm
+# exits 2 if any role is estimated; add --allow-estimated to acknowledge the risk
+
+# 2. Preflight: re-check file hashes and the settings fingerprint before staging
+cli-anything-meerk40t job preflight /tmp/j/design_manifest.json --allow-estimated
+
+# 3. Stage: verify the manifest, then load the job SVG on the live GUI kernel
+cli-anything-meerk40t attach --port 2323 stage /tmp/j/design_job.svg \
+  /tmp/j/design_manifest.json --allow-estimated
+```
+
+`--json` and `--machine` are root options, passed before the subcommand.
+The operator still runs the GRBL bring-up (origin, focus, glasses,
+ventilation) and presses Start on the GUI. Calibrate untested roles with
+`job ladder` on scrap, then `materials record --provenance tested`. The CLI
+reference lives in the skill:
+[skills/cli-anything-meerk40t/SKILL.md](skills/cli-anything-meerk40t/SKILL.md).
+
 ## GUI-visible operation (operator watches, agent controls)
 
 Use when the operator wants to see the job on the MeerK40t canvas and own

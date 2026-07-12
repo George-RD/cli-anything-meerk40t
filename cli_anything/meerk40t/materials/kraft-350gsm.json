@@ -1,0 +1,34 @@
+{
+  "name": "kraft-350gsm",
+  "description": "Kraft card, 350 gsm",
+  "machines": {
+    "sculpfun-s9": {
+      "roles": {
+        "cut": {
+          "kind": "cut",
+          "passes": 1,
+          "power": 650,
+          "speed": 16.0,
+          "provenance": "estimated",
+          "note": "2026-07-12 house burn: 950 S x3 @6mm/s over-delivered (kerf retraced on later passes). Single-pass estimate from that observation + common 5.5W diode figures - NOT an observed result. Run a cut ladder before trusting."
+        },
+        "score": {
+          "kind": "engrave",
+          "passes": 1,
+          "power": 280,
+          "speed": 20.0,
+          "provenance": "tested",
+          "note": "2026-07-12 kraft-house full burn: fold crease strength explicitly confirmed good by operator."
+        },
+        "etch": {
+          "kind": "engrave",
+          "passes": 1,
+          "power": 380,
+          "speed": 40.0,
+          "provenance": "estimated",
+          "note": "2026-07-12 kraft-house burn: engrave rendered, but quality not explicitly confirmed by operator; only a relative-intensity ladder exists in materials.md. Confirm or re-ladder, then record."
+        }
+      }
+    }
+  }
+}
