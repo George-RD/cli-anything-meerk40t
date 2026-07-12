@@ -363,6 +363,9 @@ def prepare_job(
     # processed. Drop any resolved role the map does not name BEFORE fingerprinting,
     # deriving estimated roles, or building operations, so a three-role material
     # used with `--map #ff0000=cut` yields only the cut op (and no KeyError).
+    # Keep the full resolution for the settings fingerprint so preflight (which
+    # re-resolves every role) computes the same hash regardless of the map.
+    full_settings = settings
     mapped_roles = set(color_map.values())
     settings = {role: s for role, s in settings.items() if role in mapped_roles}
 
@@ -438,6 +441,7 @@ def prepare_job(
         color = _color_for_role(role, color_map)
         op_summary.append(
             {
+                "role": role,
                 "kind": s["kind"],
                 "color": color,
                 "passes": s["passes"],
@@ -459,7 +463,7 @@ def prepare_job(
         },
         operations=op_summary,
         estimated_roles=estimated,
-        settings_fingerprint=_settings_fingerprint(settings),
+        settings_fingerprint=_settings_fingerprint(full_settings),
         verification=verification,
     )
 

@@ -188,21 +188,39 @@ def _stage_file(kernel, b64_path, expected_sha=None):
             )
         }
 
-    # Load the file via the canonical console loader. We deliberately do NOT
-    # pre-clear the scene: the meerk40t project-SVG loader replaces the whole
-    # operations tree on each load (loading a second job yields that job's
-    # operations, not the union), so staging always leaves exactly the staged
-    # job's operations - which are the only nodes that burn. An explicit clear
-    # is both unnecessary and actively harmful here: on this MeerK40t build a
-    # clear (console `operation* delete` OR the elements-service
-    # `clear_elements_and_operations()`) corrupts loader state so every
-    # SUBSEQUENT load silently adds nothing. A hash mismatch still returns the
-    # error frame above without ever touching the scene.
-    kernel.console(f"load {path}\n")
-
+    # Replace the scene with exactly the staged job. The meerk40t console
+    # `load` command APPENDS a project's operations and elements, so without
+    # cleanup a second stage would leave the previous job's operations live for
+    # the burn - a safety hole. A pre-clear via branch-delete
+    # (`operation* delete`) or the elements-service
+    # `clear_elements_and_operations()` corrupts loader state on this build so
+    # every subsequent load silently adds nothing. Per-node removal AFTER the
+    # load is safe (the loader keeps working), so we snapshot the pre-existing
+    # nodes, load the job, then remove exactly that snapshot - leaving only the
+    # freshly staged job's operations and elements.
     elements = getattr(kernel, "elements", None)
     if elements is None:
         raise RuntimeError("elements service is not available")
+    pre_existing = list(elements.ops()) + list(elements.elems())
+
+    kernel.console(f"load {path}\n")
+
+    # Strip only the nodes that pre-dated this load and still remain: where
+    # `load` appends, this removes the previous job; where `load` already
+    # replaces the scene, the old nodes are gone and nothing is stripped.
+    # Either way the scene ends as exactly the staged job. pre_existing holds
+    # live references, so the identities stay stable for the comparison.
+    current_ids = {id(n) for n in list(elements.ops()) + list(elements.elems())}
+    for node in pre_existing:
+        if id(node) not in current_ids:
+            continue
+        try:
+            node.remove_node()
+        except Exception:
+            try:
+                node.remove()
+            except Exception:
+                pass
 
     elem_count = 0
     try:

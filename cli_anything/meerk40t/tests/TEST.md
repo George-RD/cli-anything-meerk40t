@@ -10,11 +10,11 @@ All tests are `unittest`-style cases collected and run by `pytest` (a `conftest.
 
 | File | Count | Scope |
 |------|-------|-------|
-| `tests/test_core.py` | 113 unit tests | Backend wrapper, project, elements, operations, session, export, device, serial/GRBL probe parsers, profile overlay, export guard, CLI device/machine command-suite wiring, packaged-skill integrity, materials loader, job-prep provenance, job manifest, and client-frame attachment.
+| `tests/test_core.py` | 116 unit tests | Backend wrapper, project, elements, operations, session, export, device, serial/GRBL probe parsers, profile overlay, export guard, CLI device/machine command-suite wiring, packaged-skill integrity, materials loader, job-prep provenance, job manifest, and client-frame attachment.
 | `tests/test_mk_plugin.py` | 15 unit tests | MeerK40t back-fill bridge plugin: behavioural upstream detection, `set` replacement, handover transforms, patch idempotence, runtime web-server patch. |
-| `tests/test_full_e2e.py` | 29 E2E tests | CLI subprocess workflows, backend round-trips, realistic laser-job scenarios, the smart-laser workflow (materials, job-prepare provenance gate, determinism, new-material lifecycle), and client-frame attach round-trips over a live consoleserver.
+| `tests/test_full_e2e.py` | 31 E2E tests | CLI subprocess workflows, backend round-trips, realistic laser-job scenarios, the smart-laser workflow (materials, job-prepare provenance gate, determinism, new-material lifecycle), and client-frame attach round-trips over a live consoleserver.
 
-Total: 128 unit + 29 E2E = 157 tests.
+Total: 131 unit + 31 E2E = 162 tests.
 
 Both test modules create fresh backends in `setUp` and tear them down in `tearDown`. E2E tests that exercise the installed CLI also fall back to `python -m cli_anything.meerk40t.meerk40t_cli` if the console script is not on `PATH`.
 
@@ -113,6 +113,11 @@ Both test modules create fresh backends in `setUp` and tear them down in `tearDo
 - `test_out_of_range_power_raises` / `test_out_of_range_speed_raises` / `test_out_of_range_passes_raises` - resolved settings with power outside 1..1000, non-positive speed, or passes below 1 raise JobPrepError before the kernel boots.
 - `test_ladder_length_zero_raises` / `test_ladder_pitch_zero_raises` / `test_ladder_passes_zero_raises` / `test_ladder_negative_geometry_raises` - ladder geometry with non-positive length, pitch, or passes is rejected before any file is written.
 
+### `TestStageFileScene` — attach-stage scene contract against a real backend
+- `test_stage_loads_job` - staging a job through `mk_control._stage_file` on Meerk40tBackend loads its elements and operations.
+- `test_stage_replaces_scene_no_accumulation` - staging a second job replaces the first: the scene keeps exactly one job's operations and elements, never the union (the authoritative anti-accumulation check the partial consoleserver kernel cannot exercise).
+- `test_stage_hash_mismatch_refused_scene_untouched` - a wrong expected hash returns an error frame and leaves the scene byte-for-byte unchanged.
+
 ---
 
 ## 3. E2E Test Plan (`test_full_e2e.py`)
@@ -152,6 +157,8 @@ All tests use the helper `_resolve_cli("cli-anything-meerk40t")`, which returns 
 - `test_materials_record_out_of_range_rejected` - `materials record` rejects power outside 1..1000, non-positive speed, and passes below 1.
 - `test_agent_stage_hash_mismatch_refused` - a staged file whose bytes differ from the recorded hash returns an error frame and leaves the scene unchanged.
 - `test_attach_stage_path_with_space` - a job path containing spaces stages cleanly through the base64 wire format.
+- `test_ladder_manifest_preflights_without_crash` - a ladder manifest (no material/roles) preflights as a structured result instead of crashing with UnboundLocalError.
+- `test_custom_map_job_preflights_cleanly` - a cut-only custom-map job prepares and then preflights without a false tamper rejection (gate derived from operation roles; fingerprint over the full resolution).
 
 ---
 
@@ -162,8 +169,8 @@ detection, console `set` replacement (typed values, feedback, `-p` path flag),
 console/web server handover transforms, patch idempotence and failure
 isolation, the `bridge_status` console command, and the runtime web-server
 patch against a real temp module.
-Together with `test_core.py` (113) this makes 128 unit tests; `test_full_e2e.py`
-adds 29 E2E tests (157 total).
+Together with `test_core.py` (116) this makes 131 unit tests; `test_full_e2e.py`
+adds 31 E2E tests (162 total).
 
 ## 4. Realistic Workflow Scenarios
 
@@ -199,7 +206,7 @@ adds 29 E2E tests (157 total).
 ```
 $ .venv/bin/python -m pytest cli_anything/meerk40t/tests/test_core.py -v
 
-113 passed in ~4.2s
+116 passed in ~4.2s
 
 OK
 ```
@@ -236,12 +243,12 @@ All unit tests passed (current inventory above):
 ```
 $ .venv/bin/python -m pytest cli_anything/meerk40t/tests/test_full_e2e.py -v
 
-29 passed in ~22s
+31 passed in ~25s
 
 OK
 ```
 
-All 29 E2E tests passed:
+All 31 E2E tests passed:
 - TestCLISubprocess: 10 tests (help, project_new_json, elements_circle_json, elements_rect_stroke_fill, elements_list, export_svg, console_passthrough, persistence, elements_transformations_cli, operations_management_cli) via the installed `cli-anything-meerk40t` command
 - TestBackendE2E: 3 tests (gcode_export_with_grbl, svg_round_trip, full_workflow)
 - TestSmartLaserWorkflow: 5 tests (materials_list_and_show, job_prepare_gate, determinism_swap, new_material_lifecycle, attach_ignores_global_project_and_skips_kernel) covering the provenance gate, deterministic material swap, new-material calibration lifecycle, and the attach backend-skip guarantee
@@ -251,10 +258,10 @@ All 29 E2E tests passed:
 
 | Suite | Tests | Passed | Failed | Time |
 |---|---|---|---|---|
-| test_core | 113 | 113 | 0 | 4.2s |
+| test_core | 116 | 116 | 0 | 4.3s |
 | test_mk_plugin | 15 | 15 | 0 | 0.12s |
-| test_full_e2e | 29 | 29 | 0 | 22.0s |
-| **Total** | **157** | **157** | **0** | **~27s** |
+| test_full_e2e | 31 | 31 | 0 | 25.0s |
+| **Total** | **162** | **162** | **0** | **~30s** |
 
 Pass rate: 100%
 

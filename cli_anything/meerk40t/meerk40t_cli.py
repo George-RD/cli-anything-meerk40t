@@ -1380,66 +1380,49 @@ def _run_preflight(
         )
 
     # 4. Estimated-role gate - derived from the TRUSTED material store, never
-    #    from the manifest's recorded estimated_roles (the manifest is an
-    #    artefact and is not trusted for provenance). Re-resolve settings for
-    #    (machine, material), restrict to the roles actually present in the
-    #    job operations, and treat any role whose provenance is not "tested"
-    #    as estimated. If this re-derivation disagrees with the recorded set,
-    #    the manifest has been tampered with.
-    ops = manifest.get("operations", []) or []
-    inverse_color_map = {
-        c.lower(): r for r, c in job_prep_mod.DEFAULT_COLOR_MAP.items()
-    }
-    present_roles: set[str] | None = set()
-    custom_map_unknown = False
-    for op in ops:
-        if not isinstance(op, dict):
-            continue
-        color = op.get("color")
-        if color is None:
-            continue
-        role = inverse_color_map.get(str(color).lower())
-        if role is not None:
-            present_roles.add(role)
-        else:
-            custom_map_unknown = True
-    if not present_roles and custom_map_unknown:
-        # A custom colour map prepared the job and we cannot map its colours
-        # back to roles; fall back to every resolved role rather than risk a
-        # false tamper rejection for a legitimate job.
-        present_roles = None
-
-    recorded_estimated = set(manifest.get("estimated_roles", []) or [])
+    #    from the manifest's recorded estimated_roles. The roles that actually
+    #    burn are recorded per-operation (and are hash-locked through the gcode
+    #    verified in step 1), so we re-resolve their provenance from the
+    #    material store and treat any non-"tested" role as estimated. A
+    #    disagreement with the recorded set means the manifest was tampered
+    #    with. Ladder manifests carry no roles, so the gate does not apply.
     reevaluated_estimated: set[str] = set()
-    resolution_ok = False
-    mat = materials_mod.load_material(material) if material else None
-    if mat is not None:
-        try:
-            resolved = materials_mod.resolve_settings(mat, machine)
-            resolution_ok = True
-            for role, rset in resolved.items():
-                if present_roles is not None and role not in present_roles:
-                    continue
-                if rset.get("provenance") != "tested":
-                    reevaluated_estimated.add(role)
-        except ValueError:
-            # The machine has no entry for this material; step 2 already
-            # recorded a failure and this gate is moot.
-            pass
-
-    if resolution_ok and reevaluated_estimated != recorded_estimated:
-        return (
-            {
-                "ok": False,
-                "failures": [
-                    "manifest estimated_roles tampered: recorded "
-                    f"{sorted(recorded_estimated)} but the material store resolves "
-                    f"{sorted(reevaluated_estimated)}"
-                ],
-            },
-            2 if stage_mode else 1,
-        )
-
+    if not is_ladder:
+        ops = manifest.get("operations", []) or []
+        present_roles: set[str] | None = {
+            op["role"]
+            for op in ops
+            if isinstance(op, dict) and op.get("role")
+        }
+        if not present_roles:
+            # Older manifests recorded no per-operation role; fall back to every
+            # resolved role rather than risk a false tamper rejection.
+            present_roles = None
+        recorded_estimated = set(manifest.get("estimated_roles", []) or [])
+        mat_gate = materials_mod.load_material(material) if material else None
+        if mat_gate is not None:
+            try:
+                resolved = materials_mod.resolve_settings(mat_gate, machine)
+            except ValueError:
+                resolved = None
+            if resolved is not None:
+                for role, rset in resolved.items():
+                    if present_roles is not None and role not in present_roles:
+                        continue
+                    if rset.get("provenance") != "tested":
+                        reevaluated_estimated.add(role)
+                if reevaluated_estimated != recorded_estimated:
+                    return (
+                        {
+                            "ok": False,
+                            "failures": [
+                                "manifest estimated_roles tampered: recorded "
+                                f"{sorted(recorded_estimated)} but the material store "
+                                f"resolves {sorted(reevaluated_estimated)}"
+                            ],
+                        },
+                        2 if stage_mode else 1,
+                    )
     reevaluated_estimated_list = sorted(reevaluated_estimated)
     if reevaluated_estimated_list and not allow_estimated:
         gate = list(failures)
@@ -1818,6 +1801,18 @@ def attach_stage(ctx, job_svg, manifest, allow_estimated):
         manifest_data = json.loads(mpath.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
         _emit(ctx, {"ok": False, "failures": [f"manifest unreadable: {exc}"]})
+        sys.stdout = _REAL_STDOUT
+        ctx.exit(2)
+    if not isinstance(manifest_data, dict):
+        _emit(
+            ctx,
+            {
+                "ok": False,
+                "failures": [
+                    f"manifest root must be a JSON object, got {type(manifest_data).__name__}"
+                ],
+            },
+        )
         sys.stdout = _REAL_STDOUT
         ctx.exit(2)
 

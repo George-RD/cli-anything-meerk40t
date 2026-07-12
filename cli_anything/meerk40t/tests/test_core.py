@@ -1734,6 +1734,91 @@ class TestAttachClientFrame(unittest.TestCase):
         reply = attach_send("127.0.0.1", port, "agent status", timeout=2.0)
         self.assertEqual(reply, {"protocol": 1, "elements": 3})
 
+class TestStageFileScene(unittest.TestCase):
+    """`mk_control._stage_file` against a real backend: load, replace, refuse.
+
+    This is the authoritative coverage for the attach-stage scene contract
+    (PR #24 findings 3+4). The consoleserver E2E harness boots a partial kernel
+    that does not register the job loader, so scene behaviour is verified here
+    against Meerk40tBackend, which loads jobs exactly as a running GUI does.
+    """
+
+    def setUp(self):
+        import base64 as _b64
+        import hashlib as _hl
+        import cli_anything.meerk40t.mk_control as _mkc
+        self._b64 = _b64
+        self._hl = _hl
+        self._mkc = _mkc
+        self.temp_dir = tempfile.mkdtemp(prefix="mk_stage_")
+        self.backend = Meerk40tBackend()
+        self.backend.start()
+
+    def tearDown(self):
+        self.backend.shutdown()
+        shutil.rmtree(self.temp_dir, ignore_errors=True)
+
+    def _make_job(self):
+        d = tempfile.mkdtemp(dir=self.temp_dir)
+        svg = os.path.join(d, "in.svg")
+        with open(svg, "w", encoding="utf-8") as fh:
+            fh.write(
+                '<svg xmlns="http://www.w3.org/2000/svg" width="50mm" '
+                'height="50mm" viewBox="0 0 50 50">'
+                '<rect x="1" y="1" width="10" height="10" fill="none" stroke="#ff0000"/>'
+                '<rect x="1" y="15" width="10" height="10" fill="none" stroke="#0000ff"/>'
+                '<rect x="1" y="30" width="10" height="10" fill="none" stroke="#000000"/>'
+                "</svg>"
+            )
+        return job_prep_mod.prepare_job(
+            svg, d, machine="sculpfun-s9", material="kraft-350gsm",
+            allow_estimated=True,
+        )["job_svg"]
+
+    def _sha(self, path):
+        h = self._hl.sha256()
+        with open(path, "rb") as fh:
+            h.update(fh.read())
+        return h.hexdigest()
+
+    def _b64path(self, path):
+        return self._b64.b64encode(os.path.abspath(path).encode("utf-8")).decode("ascii")
+
+    def _stage(self, path, sha):
+        return self._mkc._stage_file(self.backend.kernel, self._b64path(path), expected_sha=sha)
+
+    def test_stage_loads_job(self):
+        job = self._make_job()
+        reply = self._stage(job, self._sha(job))
+        self.assertIsNone(reply.get("error"))
+        self.assertEqual(reply["elements"], 3)
+        self.assertEqual(len(reply["operations"]), 3)
+
+    def test_stage_replaces_scene_no_accumulation(self):
+        job_a = self._make_job()
+        job_b = self._make_job()
+        first = self._stage(job_a, self._sha(job_a))
+        second = self._stage(job_b, self._sha(job_b))
+        # The second stage must REPLACE, not accumulate: staging two jobs still
+        # leaves exactly one job's operations and elements in the scene.
+        self.assertEqual(second["elements"], first["elements"])
+        self.assertEqual(len(second["operations"]), len(first["operations"]))
+        self.assertEqual(second["elements"], 3)
+
+    def test_stage_hash_mismatch_refused_scene_untouched(self):
+        job = self._make_job()
+        self._stage(job, self._sha(job))
+        el = self.backend.kernel.elements
+        before_ops = len(list(el.ops()))
+        before_elems = len(list(el.elems()))
+        # A wrong expected hash must return an error frame and leave the scene
+        # untouched (nothing loaded, nothing removed).
+        reply = self._stage(job, "0" * 64)
+        self.assertIn("error", reply)
+        self.assertIn("hash", reply["error"].lower())
+        self.assertEqual(len(list(el.ops())), before_ops)
+        self.assertEqual(len(list(el.elems())), before_elems)
+
 
 if __name__ == "__main__":
     unittest.main()
