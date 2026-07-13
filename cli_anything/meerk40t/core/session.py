@@ -1,6 +1,10 @@
 import json
 import os
+import tempfile
 import time
+
+from cli_anything.meerk40t.utils.meerk40t_backend import BackendError
+from .project import open_project
 
 
 class Session:
@@ -16,14 +20,17 @@ class Session:
             try:
                 with open(session_path, "r", encoding="utf-8") as f:
                     data = json.load(f)
-                self.name = data.get("name", "Untitled")
-                self.svg_path = data.get("svg_path")
-                self.modified = data.get("modified", False)
-                self.history = data.get("history", [])
-                self.undo_stack = data.get("undo_stack", [])
-                self.redo_stack = data.get("redo_stack", [])
-            except Exception:
-                pass
+            except Exception as exc:
+                raise BackendError(
+                    f"corrupt session file {session_path}: {exc}",
+                    path=session_path,
+                )
+            self.name = data.get("name", "Untitled")
+            self.svg_path = data.get("svg_path")
+            self.modified = data.get("modified", False)
+            self.history = data.get("history", [])
+            self.undo_stack = data.get("undo_stack", [])
+            self.redo_stack = data.get("redo_stack", [])
 
     def save(self, backend=None):
         data = {
@@ -34,28 +41,55 @@ class Session:
             "undo_stack": self.undo_stack,
             "redo_stack": self.redo_stack,
         }
-        self._locked_save_json(self.session_path, data)
+        # Coordinated: surface a session-SVG save failure BEFORE writing the
+        # JSON so a half-persisted session is never reported as saved.
         if backend is not None and self.svg_path:
-            from cli_anything.meerk40t.utils.meerk40t_backend import Meerk40tBackend
-            backend.save_svg(self.svg_path, "default")
+            try:
+                ok = backend.save_svg(self.svg_path, "default")
+            except Exception as exc:
+                raise BackendError(
+                    f"failed to save session SVG: {exc}", path=self.svg_path
+                ) from exc
+            if not ok:
+                raise BackendError(
+                    "failed to save session SVG: verification returned false",
+                    path=self.svg_path,
+                )
+        self._locked_save_json(self.session_path, data)
+        self.modified = False
         return {"saved": True, "path": self.session_path}
 
-    @staticmethod
-    def _locked_save_json(path, data):
+    def _locked_save_json(self, path, data):
         try:
             import fcntl
+        except ImportError:
+            fcntl = None
 
-            with open(path, "w", encoding="utf-8") as f:
-                fcntl.flock(f.fileno(), fcntl.LOCK_EX)
-                try:
-                    f.truncate()
-                    f.seek(0)
-                    json.dump(data, f, indent=2)
-                finally:
-                    fcntl.flock(f.fileno(), fcntl.LOCK_UN)
-        except Exception:
-            with open(path, "w", encoding="utf-8") as f:
+        directory = os.path.dirname(os.path.abspath(path)) or "."
+        fd, tmp = tempfile.mkstemp(suffix=".json", prefix=".mksess-", dir=directory)
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
                 json.dump(data, f, indent=2)
+                f.flush()
+                os.fsync(f.fileno())
+            if fcntl is not None:
+                lock_fd = os.open(path, os.O_RDONLY | os.O_CREAT, 0o644)
+                try:
+                    fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    os.replace(tmp, path)
+                finally:
+                    fcntl.flock(lock_fd, fcntl.LOCK_UN)
+                    os.close(lock_fd)
+            else:
+                # Non-POSIX (e.g. Windows): advisory locking unavailable.
+                os.replace(tmp, path)
+        except Exception:
+            try:
+                if os.path.exists(tmp):
+                    os.remove(tmp)
+            except Exception:
+                pass
+            raise
 
     def record_command(self, cmd):
         self.history.append({"cmd": cmd, "ts": time.time()})
@@ -86,3 +120,9 @@ class Session:
             "undo_count": len(self.undo_stack),
             "redo_count": len(self.redo_stack),
         }
+
+    def restore(self, backend):
+        """Reload the recorded SVG via the transactional open path."""
+        if not self.svg_path:
+            return {"ok": False, "error": "no svg_path recorded in session"}
+        return open_project(backend, self.svg_path)

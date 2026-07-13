@@ -429,16 +429,36 @@ def cli(
     ctx.obj["machine_name"] = machine
     ctx.obj["project_path"] = project_path
     if session_path:
-        sess = session_mod.Session(session_path)
+        try:
+            sess = session_mod.Session(session_path)
+        except BackendError as exc:
+            _emit(
+                ctx,
+                {"error": str(exc), "path": exc.path, "category": exc.category},
+            )
+            sys.stdout = _REAL_STDOUT
+            ctx.exit(1)
     else:
         sess = None
     ctx.obj["session"] = sess
 
+    # Deterministic precedence: an explicit --project wins over --session alone.
     if project_path and backend is not None:
-        project_mod.open_project(backend, project_path)
+        result = project_mod.open_project(backend, project_path)
+        if result.get("error") is not None:
+            _emit(ctx, result)
+            sys.stdout = _REAL_STDOUT
+            ctx.exit(1)
         if sess:
             sess.name = os.path.basename(project_path)
             sess.svg_path = project_path
+    elif sess and getattr(sess, "svg_path", None) and backend is not None:
+        # --session alone restores the recorded SVG.
+        result = project_mod.open_project(backend, sess.svg_path)
+        if result.get("error") is not None:
+            _emit(ctx, result)
+            sys.stdout = _REAL_STDOUT
+            ctx.exit(1)
 
     if ctx.invoked_subcommand is None:
         ctx.invoke(repl)
@@ -473,10 +493,14 @@ def project_new(ctx: click.Context, name: str):
 def project_open(ctx: click.Context, path: str):
     """Open an existing SVG project."""
     result = project_mod.open_project(ctx.obj["backend"], path)
-    sess = ctx.obj.get("session")
-    if sess:
-        sess.name = os.path.basename(path)
-        sess.svg_path = path
+    # Only rebind the active project on success: a failed open must never leave
+    # the previous project's binding in place (which would autosave B into A).
+    if result.get("error") is None:
+        ctx.obj["project_path"] = path
+        sess = ctx.obj.get("session")
+        if sess:
+            sess.name = os.path.basename(path)
+            sess.svg_path = path
     _emit(ctx, result)
 
 
@@ -488,11 +512,13 @@ def project_open(ctx: click.Context, path: str):
 def project_save(ctx: click.Context, path: str, version: str):
     """Save the current project to an SVG file."""
     result = project_mod.save_project(ctx.obj["backend"], path, version=version)
-    sess = ctx.obj.get("session")
-    if sess:
-        sess.name = os.path.basename(path)
-        sess.svg_path = path
-        sess.modified = False
+    if result.get("error") is None:
+        ctx.obj["project_path"] = path
+        sess = ctx.obj.get("session")
+        if sess:
+            sess.name = os.path.basename(path)
+            sess.svg_path = path
+            sess.modified = False
     _emit(ctx, result)
 
 
@@ -509,9 +535,13 @@ def project_info_cmd(ctx: click.Context):
 def project_close(ctx: click.Context):
     """Close the current project."""
     result = project_mod.close_project(ctx.obj["backend"])
-    sess = ctx.obj.get("session")
-    if sess:
-        sess.modified = False
+    if result.get("error") is None:
+        # Drop the binding so autosave writes no stale project SVG.
+        ctx.obj["project_path"] = None
+        sess = ctx.obj.get("session")
+        if sess:
+            sess.svg_path = None
+            sess.modified = False
     _emit(ctx, result)
 
 
@@ -1193,23 +1223,34 @@ def _dispatch_repl(ctx: click.Context, line: str, skin: ReplSkin, commands: dict
             elif sub == "open":
                 path = args[0]
                 result = project_mod.open_project(backend, path)
-                if sess:
-                    sess.name = os.path.basename(path)
-                    sess.svg_path = path
+                # Guard rebind on success only (mirrors project_open): a failed
+                # open must keep the prior binding so the next autosave cannot
+                # write the current scene into the failed target (AC2/AC3).
+                if result.get("error") is None:
+                    ctx.obj["project_path"] = path
+                    if sess:
+                        sess.name = os.path.basename(path)
+                        sess.svg_path = path
             elif sub == "save":
                 path = args[0]
                 version = args[1] if len(args) > 1 else "default"
                 result = project_mod.save_project(backend, path, version=version)
-                if sess:
-                    sess.name = os.path.basename(path)
-                    sess.svg_path = path
-                    sess.modified = False
+                if result.get("error") is None:
+                    ctx.obj["project_path"] = path
+                    if sess:
+                        sess.name = os.path.basename(path)
+                        sess.svg_path = path
+                        sess.modified = False
             elif sub == "info":
                 result = project_mod.project_info(backend)
             elif sub == "close":
                 result = project_mod.close_project(backend)
-                if sess:
-                    sess.modified = False
+                if result.get("error") is None:
+                    # Drop the binding so autosave writes no stale project SVG.
+                    ctx.obj["project_path"] = None
+                    if sess:
+                        sess.svg_path = None
+                        sess.modified = False
             else:
                 result = {"error": f"Unknown project command: {sub}"}
         elif group == "elements":
