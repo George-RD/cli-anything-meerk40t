@@ -28,6 +28,30 @@ DEFAULT_SETTLE = 2.0
 _BANNER_RE = re.compile(r"Grbl\s+([0-9][\w.]+)")
 _VER_RE = re.compile(r"\[VER:([^\]]+)\]")
 _STATE_RE = re.compile(r"<(Idle|Run|Jog|Alarm|Door|Check|Home|Hold|Sleep)[|>]")
+GRBL_STATES = ("Idle", "Run", "Jog", "Alarm", "Door", "Check", "Home", "Hold", "Sleep")
+
+_STATE_FULL_RE = re.compile(r"<([A-Za-z]+)(?::([^|>]+))?[|>]")
+
+def parse_grbl_state(text):
+    """Return ``(base, substate)`` for a GRBL ``<...>`` status/state token.
+
+    ``base`` is one of ``GRBL_STATES`` or ``None``; ``substate`` is the optional
+    ``<State:detail>`` payload (e.g. ``Hold:0`` -> ``'0'``) or ``None``. A bare
+    state name with no angle brackets is also accepted.
+    """
+    if not text:
+        return None, None
+    m = _STATE_FULL_RE.search(text)
+    if m:
+        base = m.group(1)
+        if base not in GRBL_STATES:
+            return None, None
+        sub = m.group(2)
+        return base, (sub if sub is not None else None)
+    bare = text.strip().strip("<>").strip()
+    if bare in GRBL_STATES:
+        return bare, None
+    return None, None
 
 
 def list_serial_ports() -> list[str]:

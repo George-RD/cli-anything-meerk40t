@@ -3157,3 +3157,286 @@ class TestMaterialAtomicity(BackendTestCase):
             materials_mod.save_user_material("ac8new", bad, config_home=self.tmp)
         self.assertFalse(
             os.path.exists(os.path.join(self.tmp, "materials", "ac8new.json")))
+
+# --- Regression suite for issue #32: provider-aware state + correlated acks ---
+
+
+class _MConn:
+    def __init__(self, connected=True):
+        self.connected = connected
+
+
+class _MChannel:
+    def __init__(self):
+        self._watchers = []
+        self._buffer = []
+
+    def watch(self, cb):
+        self._watchers.append(cb)
+        for p in self._buffer:
+            cb(p)
+        self._buffer = []
+
+    def unwatch(self, cb):
+        if cb in self._watchers:
+            self._watchers.remove(cb)
+
+    def push(self, payload):
+        if self._watchers:
+            for cb in list(self._watchers):
+                cb(payload)
+        else:
+            self._buffer.append(payload)
+
+
+class _MController:
+    def __init__(self, channel, replies="ok", connected=True):
+        self.connection = _MConn(connected)
+        self.written = []
+        self._channel = channel
+        self._replies = replies
+        self._idx = 0
+
+    def write(self, line):
+        self.written.append(line)
+        conn = self.connection
+        if conn is not None:
+            connected = getattr(conn, "connected", None)
+            if connected is None and callable(getattr(conn, "is_connected", None)):
+                connected = conn.is_connected()
+            if not connected:
+                return
+        if self._channel is None:
+            return
+        if callable(self._replies):
+            r = self._replies(line, self._idx)
+        elif isinstance(self._replies, (list, tuple)):
+            r = self._replies[self._idx] if self._idx < len(self._replies) else self._replies[-1]
+        else:
+            r = self._replies
+        self._idx += 1
+        if isinstance(r, list):
+            for item in r:
+                if item:
+                    self._channel.push(item)
+        elif r:
+            self._channel.push(r)
+
+
+class TestMotionAckRegression(unittest.TestCase):
+    def _live_backend(self, replies="ok", connected=True, prebuffer=None):
+        ch = _MChannel()
+        ctrl = _MController(ch, replies=replies, connected=connected)
+        if prebuffer:
+            ch._buffer.extend(prebuffer)
+        dev = type("Dev", (), {
+            "safe_label": "FakeGRBL",
+            "controller": ctrl if connected else None,
+            "__str__": lambda self: "GRBLDevice",
+        })()
+        backend = type("B", (), {})()
+        backend.device = lambda: dev
+        backend.kernel = type("K", (), {"channel": staticmethod(lambda n: ch)})()
+        return backend, ctrl
+
+    def _spooler_backend(self, spooler_idle=True, connected=True):
+        ch = _MChannel()
+        ctrl = _MController(ch, replies=["ok"], connected=connected)
+        spooler = type("Spooler", (), {"is_idle": lambda self: spooler_idle})()
+        dev = type("Dev", (), {
+            "safe_label": "FakeGRBL",
+            "controller": ctrl if connected else None,
+            "spooler": spooler,
+            "__str__": lambda self: "GRBLDevice",
+        })()
+        backend = type("B", (), {})()
+        backend.device = lambda: dev
+        backend.kernel = type("K", (), {"channel": staticmethod(lambda n: ch)})()
+        backend.run = lambda cmd: None
+        backend.spooler = spooler
+        return backend, ctrl
+
+    # 1. Disconnected device: home/move must refuse (currently they do not)
+    def test_home_refused_without_connection(self):
+        backend = Meerk40tBackend()
+        backend.start()
+        try:
+            res = device_mod.home(backend)
+            self.assertIn("error", res)
+            self.assertFalse(res.get("acknowledged", False))
+        finally:
+            backend.shutdown()
+
+    def test_move_refused_without_connection(self):
+        backend = Meerk40tBackend()
+        backend.start()
+        try:
+            res = device_mod.move(backend, 1.0, 2.0)
+            self.assertIn("error", res)
+            self.assertFalse(res.get("acknowledged", False))
+        finally:
+            backend.shutdown()
+
+    # 2. Each provider lifecycle shape (connection gate honors GRBL bool and Lihuiyu is_connected())
+    def test_grbl_lifecycle_connected_acknowledges(self):
+        backend, ctrl = self._live_backend(replies="ok", connected=True)
+        res = device_mod.jog(backend, 1.0, 1.0)
+        self.assertTrue(res.get("acknowledged"))
+
+    def test_lihuiyu_lifecycle_connected_acknowledges(self):
+        ch = _MChannel()
+        ctrl = _MController(ch, replies="ok", connected=True)
+        ctrl.connection = type("Conn", (), {"is_connected": lambda self: True})()
+        dev = type("Dev", (), {
+            "safe_label": "FakeLihuiyu",
+            "controller": ctrl,
+            "__str__": lambda self: "LihuiyuDevice",
+        })()
+        backend = type("B", (), {})()
+        backend.device = lambda: dev
+        backend.kernel = type("K", (), {"channel": staticmethod(lambda n: ch)})()
+        res = device_mod.jog(backend, 1.0, 1.0)
+        self.assertTrue(res.get("acknowledged"))
+
+    def test_grbl_disconnected_refuses(self):
+        backend, ctrl = self._live_backend(replies="ok", connected=False)
+        res = device_mod.jog(backend, 1.0, 1.0)
+        self.assertIn("error", res)
+        self.assertFalse(res.get("acknowledged", False))
+
+    def test_lihuiyu_disconnected_refuses(self):
+        ch = _MChannel()
+        ctrl = _MController(ch, replies="ok", connected=True)
+        ctrl.connection = type("Conn", (), {"is_connected": lambda self: False})()
+        dev = type("Dev", (), {
+            "safe_label": "FakeLihuiyu",
+            "controller": ctrl,
+            "__str__": lambda self: "LihuiyuDevice",
+        })()
+        backend = type("B", (), {})()
+        backend.device = lambda: dev
+        backend.kernel = type("K", (), {"channel": staticmethod(lambda n: ch)})()
+        res = device_mod.jog(backend, 1.0, 1.0)
+        self.assertIn("error", res)
+
+    # 3. Stale reply before command must be drained
+    def test_stale_reply_drained(self):
+        backend, ctrl = self._live_backend(replies="error:9", prebuffer=["ok"])
+        res = device_mod.jog(backend, 1.0, 1.0)
+        self.assertFalse(res.get("acknowledged"))
+        self.assertEqual(res.get("error"), "error:9")
+        self.assertEqual(res.get("response"), "error:9")
+
+    # 4. A status report without a terminal ack must be indeterminate, not success
+    def test_interleaved_status_indeterminate(self):
+        backend, ctrl = self._live_backend(replies=["<Idle|WPos:0,0,0>"])
+        res = device_mod.jog(backend, 1.0, 1.0)
+        self.assertFalse(res.get("acknowledged"))
+        self.assertIsNone(res.get("error"))
+
+    # 5. error:/ALARM:
+    def test_error_reply(self):
+        backend, ctrl = self._live_backend(replies="error:9")
+        res = device_mod.jog(backend, 1.0, 1.0)
+        self.assertFalse(res.get("acknowledged"))
+        self.assertEqual(res.get("error"), "error:9")
+
+    def test_alarm_reply_rejected(self):
+        backend, ctrl = self._live_backend(replies="<Alarm:1|WPos:0,0,0>")
+        res = device_mod.jog(backend, 1.0, 1.0)
+        self.assertFalse(res.get("acknowledged"))
+        self.assertIn("Alarm", res.get("error") or "")
+    def test_bare_alarm_push_rejected(self):
+        # Real GRBL 1.1 emits a bare "ALARM:N" push on a triggered alarm,
+        # distinct from the <Alarm:...> status form. It must still be rejected.
+        backend, ctrl = self._live_backend(replies="ALARM:1")
+        res = device_mod.jog(backend, 1.0, 1.0)
+        self.assertFalse(res.get("acknowledged"))
+        self.assertIn("alarm", (res.get("error") or "").lower())
+
+    # 6. timeout -> indeterminate, no auto-retry
+    def test_timeout_indeterminate_no_retry(self):
+        backend, ctrl = self._live_backend(replies=None)
+        res = device_mod.jog(backend, 1.0, 1.0)
+        self.assertFalse(res.get("acknowledged"))
+        self.assertIsNone(res.get("response"))
+        self.assertEqual(len(ctrl.written), 1)
+
+    # 7. busy/hold/door/check
+    def test_hold_state_rejected(self):
+        backend, ctrl = self._live_backend(replies="<Hold:0|WPos:0,0,0>")
+        res = device_mod.jog(backend, 1.0, 1.0)
+        self.assertFalse(res.get("acknowledged"))
+        self.assertIn("Hold", res.get("error") or "")
+
+    def test_door_state_rejected(self):
+        backend, ctrl = self._live_backend(replies="<Door:1|WPos:0,0,0>")
+        res = device_mod.jog(backend, 1.0, 1.0)
+        self.assertFalse(res.get("acknowledged"))
+        self.assertIn("Door", res.get("error") or "")
+
+    def test_check_state_rejected(self):
+        backend, ctrl = self._live_backend(replies="<Check>")
+        res = device_mod.jog(backend, 1.0, 1.0)
+        self.assertFalse(res.get("acknowledged"))
+        self.assertIn("Check", res.get("error") or "")
+
+    # 8. relative move from nonzero origin stays relative
+    def test_relative_move_keeps_relative_word(self):
+        backend, ctrl = self._live_backend(replies="ok")
+        res = device_mod.jog(backend, 5.0, 5.0, feed=600)
+        self.assertTrue(res["command"].startswith("$J=G21G91 "))
+
+    def test_move_relative_command(self):
+        backend, ctrl = self._spooler_backend(spooler_idle=True)
+        res = device_mod.move(backend, 10.0, 20.0, absolute=False)
+        self.assertIn("move ", res.get("command") or "")
+        self.assertNotIn("move_absolute", res.get("command") or "")
+
+    # 9. first-corner failure -> frame aborts early
+    def test_frame_aborts_on_first_failed_corner(self):
+        def reply_for(line, idx):
+            return "error:9" if idx == 1 else "ok"
+        backend, ctrl = self._live_backend(replies=reply_for)
+        res = device_mod.frame(backend, 10.0, 20.0, 30.0, 40.0, feed=1500)
+        self.assertFalse(res.get("framed"))
+        self.assertFalse(res.get("acknowledged"))
+        self.assertEqual(len(ctrl.written), 2)
+        self.assertEqual(len(res["corners"]), 2)
+
+    # 10. confirmed spooler-result alternative (home/move)
+    def test_home_acknowledged_via_spooler(self):
+        backend, ctrl = self._spooler_backend(spooler_idle=True)
+        res = device_mod.home(backend)
+        self.assertIs(res.get("acknowledged"), True)
+
+    def test_home_indeterminate_when_spooler_never_idles(self):
+        backend, ctrl = self._spooler_backend(spooler_idle=False)
+        res = device_mod.home(backend)
+        self.assertIs(res.get("acknowledged"), False)
+        self.assertIn("error", res)
+
+    def test_move_acknowledged_via_spooler(self):
+        backend, ctrl = self._spooler_backend(spooler_idle=True)
+        res = device_mod.move(backend, 1.0, 2.0)
+        self.assertIs(res.get("acknowledged"), True)
+
+class TestParseGrblState(unittest.TestCase):
+    def test_valid_full_vocab_preserved(self):
+        from cli_anything.meerk40t.utils import serial_probe
+        self.assertEqual(
+            serial_probe.parse_grbl_state("<Hold:0|WPos:0,0,0>"), ("Hold", "0"))
+        self.assertEqual(serial_probe.parse_grbl_state("<Run|>"), ("Run", None))
+        self.assertEqual(serial_probe.parse_grbl_state("<Check>"), ("Check", None))
+
+    def test_bogus_bracketed_base_rejected(self):
+        from cli_anything.meerk40t.utils import serial_probe
+        # Any non-GRBL alphabetic token must not surface as a state.
+        self.assertEqual(
+            serial_probe.parse_grbl_state("<Foo|WPos:0,0,0>"), (None, None))
+
+    def test_bare_state_and_empty(self):
+        from cli_anything.meerk40t.utils import serial_probe
+        self.assertEqual(serial_probe.parse_grbl_state("Idle"), ("Idle", None))
+        self.assertEqual(serial_probe.parse_grbl_state(""), (None, None))
+        self.assertEqual(serial_probe.parse_grbl_state(None), (None, None))

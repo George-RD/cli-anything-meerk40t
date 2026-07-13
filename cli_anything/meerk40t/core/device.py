@@ -18,6 +18,7 @@ the backend at boot.
 
 import re
 import time
+import threading
 
 from cli_anything.meerk40t.utils.meerk40t_backend import Meerk40tBackend
 from cli_anything.meerk40t.utils import serial_probe
@@ -143,20 +144,80 @@ def device_info(backend):
     return result
 
 
+def _confirm_spooler_idle(backend, timeout=2.0):
+    """Confirm a submitted command reached the spooler idle state.
+
+    Used by home/move as the acknowledgement signal: after enqueuing the
+    command we wait (bounded) for the spooler to drain. Returns True only if
+    the spooler reports idle within ``timeout``; otherwise False (indeterminate,
+    no auto-retry). Falls back to the device's spooler when the backend has none.
+    """
+    spooler = getattr(backend, "spooler", None)
+    if spooler is None:
+        dev = backend.device()
+        if dev is not None:
+            spooler = getattr(dev, "spooler", None)
+    if spooler is None or not hasattr(spooler, "is_idle"):
+        return False
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        try:
+            if spooler.is_idle():
+                return True
+        except Exception:
+            return False
+        time.sleep(0.05)
+    return False
+
+
 def home(backend):
+    controller, err = _require_live_connection(backend)
+    if err:
+        err["command"] = "home"
+        return err
     backend.run("home")
-    return {"homed": True}
+    acknowledged = _confirm_spooler_idle(backend)
+    return {
+        "homed": acknowledged,
+        "acknowledged": acknowledged,
+        "command": "home",
+        "error": None if acknowledged else "spooler did not reach idle within timeout",
+    }
 
 
 def physical_home(backend):
+    controller, err = _require_live_connection(backend)
+    if err:
+        err["command"] = "physical_home"
+        return err
     backend.run("physical_home")
-    return {"physical_homed": True}
+    acknowledged = _confirm_spooler_idle(backend)
+    return {
+        "physical_homed": acknowledged,
+        "acknowledged": acknowledged,
+        "command": "physical_home",
+        "error": None if acknowledged else "spooler did not reach idle within timeout",
+    }
 
 
 def move(backend, x, y, absolute=True):
+    controller, err = _require_live_connection(backend)
+    if err:
+        err["command"] = "move"
+        err["absolute"] = absolute
+        return err
     cmd = f"move_absolute {x} {y}" if absolute else f"move {x} {y}"
     backend.run(cmd)
-    return {"moved": True, "x": x, "y": y, "absolute": absolute}
+    acknowledged = _confirm_spooler_idle(backend)
+    return {
+        "moved": acknowledged,
+        "x": x,
+        "y": y,
+        "absolute": absolute,
+        "command": cmd,
+        "acknowledged": acknowledged,
+        "error": None if acknowledged else "spooler did not reach idle within timeout",
+    }
 
 
 def _connect_result(dev):
@@ -499,13 +560,33 @@ def _require_live_connection(backend):
     return controller, None
 
 
-def _await_jog_ack(backend, controller, line: str, timeout: float = 0.5) -> str:
-    """Write a jog line and capture GRBL's ok/error reply from the recv channel.
+_ACK_LOCKS: dict = {}
 
-    GRBL echoes every processed line on a ``recv-<label>`` channel; we watch it
-    briefly so the caller can report whether the move was acknowledged instead
-    of assuming success. Returns the raw reply (empty when there is no hardware
-    or no reply).
+
+def _is_terminal(line):
+    """A GRBL line that terminates a jog command's acknowledgement."""
+    s = line.strip()
+    low = s.lower()
+    if low.startswith("ok") or low.startswith("error:") or low.startswith("alarm:"):
+        return True
+    if s.startswith("<") and (
+        s.startswith("<Alarm")
+        or s.startswith("<Hold")
+        or s.startswith("<Door")
+        or s.startswith("<Check")
+    ):
+        return True
+    return False
+
+
+def _await_jog_ack(backend, controller, line, timeout=0.5):
+    """Write a jog line and correlate GRBL's own ok/error reply.
+
+    Serialized per-controller so concurrent jogs don't cross wires. Stale
+    replies that arrived before this command are drained, then only a terminal
+    reply (ok / error: / <Alarm|Hold|Door|Check>) is correlated. A status
+    report alone (e.g. <Idle|...>) is not terminal, so the result is
+    indeterminate on timeout with no auto-retry.
     """
     dev = backend.device()
     if dev is None:
@@ -515,54 +596,81 @@ def _await_jog_ack(backend, controller, line: str, timeout: float = 0.5) -> str:
         channel = backend.kernel.channel(f"recv-{label}")
     except Exception:
         channel = None
-    captured: list[str] = []
+    captured = []
 
     def _watch(payload, *args, **kwargs):
         captured.append(str(payload))
 
-    if channel is not None:
-        try:
-            channel.watch(_watch)
-        except Exception:
-            channel = None
-    try:
-        controller.write(line + "\n")
-        if channel is not None and timeout:
-            deadline = time.time() + timeout
-            while time.time() < deadline:
-                if any(
-                    c.lower().startswith("ok") or c.lower().startswith("error")
-                    for c in captured
-                ):
-                    break
-                time.sleep(0.02)
-    finally:
+    lock = _ACK_LOCKS.setdefault(id(controller), threading.Lock())
+    with lock:
         if channel is not None:
             try:
-                channel.unwatch(_watch)
+                channel.watch(_watch)
             except Exception:
-                pass
-    return "\n".join(captured)
+                channel = None
+        try:
+            # Drain stale replies that arrived before this command.
+            captured.clear()
+            controller.write(line + "\n")
+            if channel is not None and timeout:
+                deadline = time.time() + timeout
+                while time.time() < deadline:
+                    if any(_is_terminal(c) for c in captured):
+                        break
+                    time.sleep(0.02)
+        finally:
+            if channel is not None:
+                try:
+                    channel.unwatch(_watch)
+                except Exception:
+                    pass
+        # Correlate only terminal lines; ignore status reports.
+        reply = "\n".join(c for c in captured if _is_terminal(c))
+    return reply
 
 
-def _parse_ack(reply: str) -> tuple[bool, "str | None"]:
-    """Return ``(acknowledged, error_text)`` from a raw GRBL jog reply.
+def _classify_ack(reply):
+    """Classify a raw GRBL ack reply.
 
-    An explicit ``ok`` means the move was accepted; an ``error:`` line means it
-    was rejected (e.g. Alarm state, soft-limit). An empty reply cannot be
-    treated as success.
+    Returns ``(status, message)`` where status is one of ``ok``, ``error``,
+    ``alarm``, ``hold``, ``door``, ``check``, ``indeterminate``. Only an exact
+    terminal ``ok`` is acknowledged; ``error:`` and the non-idle machine states
+    ``<Alarm|Hold|Door|Check>`` are failures; status reports (``<Idle|...>``,
+    ``<Run|...>``, etc.) are not terminal and leave the result indeterminate;
+    an empty reply is indeterminate.
     """
     if not reply:
-        return False, None
-    error_text = None
-    for line in reply.splitlines():
-        lowered = line.lower()
-        if lowered.startswith("error"):
-            error_text = line
-        elif lowered.startswith("ok"):
-            if error_text is None:
-                return True, None
-    return error_text is None, error_text
+        return "indeterminate", None
+    status = "indeterminate"
+    message = None
+    for raw in reply.splitlines():
+        line = raw.strip()
+        low = line.lower()
+        if low.startswith("ok"):
+            if status == "indeterminate":
+                status = "ok"
+        elif low.startswith("error:"):
+            status = "error"
+            message = line
+        elif line.startswith("<Alarm") or low.startswith("alarm:"):
+            status = "alarm"
+            message = line
+        elif line.startswith("<Hold"):
+            status = "hold"
+            message = line
+        elif line.startswith("<Door"):
+            status = "door"
+            message = line
+        elif line.startswith("<Check"):
+            status = "check"
+            message = line
+    return status, message
+
+
+def _parse_ack(reply):
+    """Return ``(acknowledged, error_text)``; preserves the jog/goto/frame 2-tuple."""
+    status, message = _classify_ack(reply)
+    return status == "ok", message
 
 def _format_jog(mode: str, x: float, y: float, feed: int, machine_coords: bool = False) -> str:
     """Format a GRBL jog command per the GRBL 1.1 jogging spec.
@@ -629,10 +737,12 @@ def goto(backend, x: float, y: float, feed: int = 3000) -> dict:
 
 
 
-def frame(backend, x: float, y: float, w: float, h: float, feed: int = 1500) -> dict:
+def frame(backend, x, y, w, h, feed=1500):
     """Dry-frame a rectangle via five absolute jogs (start corner then the
     four edges). Returns the ordered corner list that was traced. Refuses
-    when no live connection exists. Reports per-corner GRBL acknowledgement."""
+    when no live connection exists. Reports per-corner GRBL acknowledgement and
+    aborts at the first failed corner.
+    """
     controller, err = _require_live_connection(backend)
     if err:
         err["command"] = "frame"
@@ -653,9 +763,6 @@ def frame(backend, x: float, y: float, w: float, h: float, feed: int = 1500) -> 
         line = _format_jog("G90", cx, cy, feed, machine_coords=True)
         reply = _await_jog_ack(backend, controller, line)
         ok, err_line = _parse_ack(reply)
-        if not ok:
-            acknowledged = False
-            error_text = err_line or error_text
         trace.append(
             {
                 "x": cx,
@@ -665,8 +772,12 @@ def frame(backend, x: float, y: float, w: float, h: float, feed: int = 1500) -> 
                 "error": err_line,
             }
         )
+        if not ok:
+            acknowledged = False
+            error_text = err_line or error_text
+            break  # fail-fast: do not queue further corners after a failed one
     return {
-        "framed": True,
+        "framed": acknowledged,
         "x": x,
         "y": y,
         "w": w,
