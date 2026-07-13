@@ -391,6 +391,149 @@ class TestOperations(BackendTestCase):
         res = operations.clear_operations(self.backend)
         self.assertTrue(res["cleared"])
         self.assertEqual(self.backend.op_count(), 0)
+class TestOperationsValidation(BackendTestCase):
+    """Issue #28: reject unsupported operations/properties BEFORE mutation.
+
+    Every failure-path test asserts the prior live state is unchanged.
+    """
+
+    # ── unknown operation type fails before console dispatch ─────────────
+    def test_add_unknown_type_is_rejected(self):
+        before = self.backend.op_count()
+        result = operations.add_operation(self.backend, "frobnicate")
+        self.assertIn("error", result)
+        # Tree must be untouched.
+        self.assertEqual(self.backend.op_count(), before)
+
+    def test_add_image_is_rejected_noop(self):
+        # backend.run("image") is a silent no-op; shipping it as success is a
+        # false positive. It must be rejected, not silently dropped.
+        before = self.backend.op_count()
+        result = operations.add_operation(self.backend, "image")
+        self.assertIn("error", result)
+        self.assertEqual(self.backend.op_count(), before)
+
+    # ── delete / set index bounds ──────────────────────────────────────
+    def test_set_missing_index_is_rejected(self):
+        before = self.backend.op_count()
+        result = operations.set_operation(self.backend, before + 5, "power", "500")
+        self.assertIn("error", result)
+        self.assertEqual(self.backend.op_count(), before)
+
+    def test_delete_missing_index_is_rejected(self):
+        before = self.backend.op_count()
+        result = operations.delete_operation(self.backend, before + 5)
+        self.assertIn("error", result)
+        self.assertEqual(self.backend.op_count(), before)
+
+    # ── set: unsupported key, wrong type, non-finite, out-of-range ────
+    def test_set_unsupported_key_is_rejected(self):
+        operations.add_operation(self.backend, "cut")
+        idx = self.backend.op_count() - 1
+        before = self.backend.op_count()
+        node = self.backend.ops()[idx]
+        prev_power = getattr(node, "power", None)
+        result = operations.set_operation(self.backend, idx, "not_a_real_key", "1")
+        self.assertIn("error", result)
+        node2 = self.backend.ops()[idx]
+        self.assertEqual(getattr(node2, "power", None), prev_power)
+        self.assertEqual(self.backend.op_count(), before)
+
+    def test_set_string_in_number_field_is_rejected(self):
+        operations.add_operation(self.backend, "cut")
+        idx = self.backend.op_count() - 1
+        prev = getattr(self.backend.ops()[idx], "power", None)
+        result = operations.set_operation(self.backend, idx, "power", "not-a-number")
+        self.assertIn("error", result)
+        self.assertEqual(getattr(self.backend.ops()[idx], "power", None), prev)
+
+    def test_set_nonfinite_power_is_rejected(self):
+        operations.add_operation(self.backend, "cut")
+        idx = self.backend.op_count() - 1
+        prev = getattr(self.backend.ops()[idx], "power", None)
+        for bad in ("nan", "inf", "-inf", "NaN"):
+            result = operations.set_operation(self.backend, idx, "power", bad)
+            self.assertIn("error", result, msg=f"value={bad}")
+            self.assertEqual(getattr(self.backend.ops()[idx], "power", None), prev)
+
+    def test_set_zero_negative_power_is_rejected(self):
+        operations.add_operation(self.backend, "cut")
+        idx = self.backend.op_count() - 1
+        prev = getattr(self.backend.ops()[idx], "power", None)
+        for bad in ("0", "-1", "-5"):
+            result = operations.set_operation(self.backend, idx, "power", bad)
+            self.assertIn("error", result, msg=f"value={bad}")
+            self.assertEqual(getattr(self.backend.ops()[idx], "power", None), prev)
+
+    def test_set_negative_speed_is_rejected(self):
+        operations.add_operation(self.backend, "cut")
+        idx = self.backend.op_count() - 1
+        prev = getattr(self.backend.ops()[idx], "speed", None)
+        result = operations.set_operation(self.backend, idx, "speed", "-10")
+        self.assertIn("error", result)
+        self.assertEqual(getattr(self.backend.ops()[idx], "speed", None), prev)
+
+    def test_set_fractional_passes_is_rejected(self):
+        operations.add_operation(self.backend, "cut")
+        idx = self.backend.op_count() - 1
+        prev = getattr(self.backend.ops()[idx], "passes", None)
+        result = operations.set_operation(self.backend, idx, "passes", "2.5")
+        self.assertIn("error", result)
+        self.assertEqual(getattr(self.backend.ops()[idx], "passes", None), prev)
+
+    def test_set_zero_passes_is_rejected(self):
+        operations.add_operation(self.backend, "cut")
+        idx = self.backend.op_count() - 1
+        prev = getattr(self.backend.ops()[idx], "passes", None)
+        result = operations.set_operation(self.backend, idx, "passes", "0")
+        self.assertIn("error", result)
+        self.assertEqual(getattr(self.backend.ops()[idx], "passes", None), prev)
+
+    # ── success path: requested property read back with validated value ──
+    def test_set_power_readback(self):
+        operations.add_operation(self.backend, "cut")
+        idx = self.backend.op_count() - 1
+        result = operations.set_operation(self.backend, idx, "power", "500")
+        self.assertNotIn("error", result)
+        self.assertEqual(getattr(self.backend.ops()[idx], "power", None), 500.0)
+
+    def test_set_passes_readback(self):
+        operations.add_operation(self.backend, "cut")
+        idx = self.backend.op_count() - 1
+        result = operations.set_operation(self.backend, idx, "passes", "3")
+        self.assertNotIn("error", result)
+        self.assertEqual(getattr(self.backend.ops()[idx], "passes", None), 3)
+
+    # ── postconditions: count/inventory deltas ────────────────────────
+    def test_add_proves_one_op_added(self):
+        before = self.backend.op_count()
+        result = operations.add_operation(self.backend, "cut")
+        self.assertNotIn("error", result)
+        self.assertEqual(self.backend.op_count(), before + 1)
+
+    def test_delete_proves_one_op_removed(self):
+        operations.add_operation(self.backend, "cut")
+        before = self.backend.op_count()
+        result = operations.delete_operation(self.backend, before - 1)
+        self.assertNotIn("error", result)
+        self.assertEqual(self.backend.op_count(), before - 1)
+
+    def test_clear_proves_zero_ops(self):
+        operations.add_operation(self.backend, "cut")
+        operations.add_operation(self.backend, "engrave")
+        result = operations.clear_operations(self.backend)
+        self.assertNotIn("error", result)
+        self.assertEqual(self.backend.op_count(), 0)
+
+    # ── fresh backend restarts cleanly after rejections ───────────────
+    def test_restart_after_rejections(self):
+        for bad in ("frobnicate", "image"):
+            operations.add_operation(self.backend, bad)
+        operations.add_operation(self.backend, "cut")
+        self.backend.shutdown()
+        self.backend.start()
+        self.assertIsNotNone(self.backend.kernel)
+        self.assertGreaterEqual(self.backend.op_count(), 0)
 
 
 class TestSession(unittest.TestCase):
