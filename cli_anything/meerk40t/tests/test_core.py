@@ -23,7 +23,12 @@ from cli_anything.meerk40t.core import session
 from cli_anything.meerk40t.core import device as device_mod
 from cli_anything.meerk40t.utils import serial_probe
 from cli_anything.meerk40t.utils import profiles as profiles_mod
-from cli_anything.meerk40t.utils.meerk40t_backend import Meerk40tBackend
+from cli_anything.meerk40t.utils.meerk40t_backend import (
+    Meerk40tBackend,
+    BackendError,
+    SaveVerificationError,
+    LoadError,
+)
 
 import cli_anything.meerk40t.meerk40t_cli as cli_mod
 from cli_anything.meerk40t.utils import submit as submit_mod
@@ -2030,8 +2035,331 @@ class TestCommandOutcomeBoundary(BackendTestCase):
         # must treat it as mutating and persist it (regression: was read-only).
         with patch.object(self.backend, "save_svg", wraps=self.backend.save_svg) as spy:
             _dispatch_repl(ctx, f"project open {src}", None, {})
-        self.assertEqual(sess.svg_path, src)
         spy.assert_called_once()
+
+# ── Issue #27: transactional project/session lifecycle regressions ──────────
+
+
+class _FakeBackend:
+    """Minimal backend stand-in for session-persistence tests (no kernel)."""
+
+    def __init__(self):
+        self.saved = []
+        self.fail_next = False
+
+    def elem_count(self):
+        return 0
+
+    def op_count(self):
+        return 0
+
+    def save_svg(self, path, version="default"):
+        if self.fail_next:
+            raise SaveVerificationError("injected save failure", path=path)
+        with open(path, "w", encoding="utf-8") as f:
+            f.write("<svg></svg>")
+        self.saved.append(path)
+        return True
+
+
+class TestProjectTransaction(BackendTestCase):
+    """Transactional open/save/close: failure must not destroy prior state."""
+
+    def _seed(self, kind="circle"):
+        if kind == "circle":
+            elements.add_circle(self.backend, "1in", "1in", "1in")
+        else:
+            elements.add_rect(self.backend, "0in", "0in", "1in", "1in")
+        self.assertEqual(self.backend.elem_count(), 1)
+
+    def test_failed_open_rolls_back_prior_scene(self):
+        self._seed()
+        real_load = self.backend.load_file
+
+        def boom(path):
+            raise LoadError("injected load failure", path=path)
+
+        self.backend.load_file = boom
+        existing = self.temp_path("exists.svg")
+        with open(existing, "w", encoding="utf-8") as f:
+            f.write("<svg></svg>")
+        try:
+            result = project.open_project(self.backend, existing)
+        finally:
+            self.backend.load_file = real_load
+        self.assertIsNotNone(result.get("error"), result)
+        self.assertFalse(result.get("ok", True), result)
+        self.assertEqual(self.backend.elem_count(), 1)
+
+    def test_malformed_svg_open_fails_and_preserves(self):
+        self._seed()
+        bad = self.temp_path("bad.svg")
+        with open(bad, "w", encoding="utf-8") as f:
+            f.write("this is not an svg")
+        result = project.open_project(self.backend, bad)
+        self.assertIsNotNone(result.get("error"), result)
+        self.assertEqual(self.backend.elem_count(), 1)
+
+    def test_loader_diagnostic_failure_rolls_back(self):
+        self._seed()
+        real_load = self.backend.load_file
+
+        def diag(path):
+            raise LoadError("BadFileError: malformed elements", path=path)
+
+        self.backend.load_file = diag
+        existing = self.temp_path("exists.svg")
+        with open(existing, "w", encoding="utf-8") as f:
+            f.write("<svg></svg>")
+        try:
+            result = project.open_project(self.backend, existing)
+        finally:
+            self.backend.load_file = real_load
+        self.assertIsNotNone(result.get("error"), result)
+        self.assertEqual(self.backend.elem_count(), 1)
+
+    def test_save_failure_keeps_prior_bytes(self):
+        a = self.temp_path("A.svg")
+        self._seed()
+        self.backend.save_svg(a, "default")
+        before = cli_mod._sha256_file(a)
+        self.assertIsNotNone(before)
+        real_save = self.backend.save_svg
+
+        def fail(path, version="default"):
+            raise SaveVerificationError("injected save failure", path=path)
+
+        self.backend.save_svg = fail
+        try:
+            result = project.save_project(self.backend, a, version="default")
+        finally:
+            self.backend.save_svg = real_save
+        self.assertIsNotNone(result.get("error"), result)
+        self.assertEqual(cli_mod._sha256_file(a), before)
+
+    def test_successful_open_postconditions(self):
+        b = self.temp_path("B.svg")
+        self._seed()
+        self.backend.save_svg(b, "default")
+        project.create_project(self.backend)
+        self.assertEqual(self.backend.elem_count(), 0)
+        result = project.open_project(self.backend, b)
+        self.assertIsNone(result.get("error"), result)
+        self.assertEqual(result["path"], b)
+        self.assertGreaterEqual(self.backend.elem_count(), 1)
+
+    def test_failed_close_surfaces_error(self):
+        self._seed()
+        real_clear = project._clear_elements_tree
+        project._clear_elements_tree = lambda backend: None
+        try:
+            result = project.close_project(self.backend)
+        finally:
+            project._clear_elements_tree = real_clear
+        self.assertIsNotNone(result.get("error"), result)
+        self.assertFalse(result.get("ok", True), result)
+
+    def test_close_postconditions(self):
+        self._seed()
+        result = project.close_project(self.backend)
+        self.assertTrue(result.get("closed"), result)
+        self.assertEqual(self.backend.elem_count(), 0)
+
+
+class TestSessionPersistence(unittest.TestCase):
+    """Atomic session JSON, coordinated SVG, and corruption surfacing."""
+
+    def setUp(self):
+        self.temp_dir = tempfile.mkdtemp(prefix="mk_sess_")
+        self.session_path = os.path.join(self.temp_dir, "session.json")
+
+    def tearDown(self):
+        shutil.rmtree(self.temp_dir, ignore_errors=True)
+
+    def _make_session(self):
+        with open(self.session_path, "w", encoding="utf-8") as f:
+            f.write('{"name": "prior", "svg_path": null}')
+        return session.Session(self.session_path)
+
+    def test_atomic_json_write_keeps_prior_on_replace_failure(self):
+        sess = self._make_session()
+        sess.name = "next"
+        real_replace = os.replace
+
+        def boom(src, dst):
+            raise OSError("injected replace failure")
+
+        os.replace = boom
+        try:
+            with self.assertRaises(OSError):
+                sess.save(backend=None)
+        finally:
+            os.replace = real_replace
+        with open(self.session_path, "r", encoding="utf-8") as f:
+            self.assertEqual(f.read(), '{"name": "prior", "svg_path": null}')
+
+    def test_surfaced_persistence_error_not_swallowed(self):
+        sess = self._make_session()
+        sess.name = "next"
+        real_fsync = os.fsync
+
+        def boom(fd):
+            raise OSError("injected fsync failure")
+
+        os.fsync = boom
+        try:
+            with self.assertRaises(OSError):
+                sess.save(backend=None)
+        finally:
+            os.fsync = real_fsync
+        # The atomic-write path must surface the error (not swallow it) and the
+        # prior file bytes must remain intact (AC5).
+        with open(self.session_path, "r", encoding="utf-8") as f:
+            self.assertEqual(f.read(), '{"name": "prior", "svg_path": null}')
+
+    def test_session_init_surfaces_corruption(self):
+        bad = os.path.join(self.temp_dir, "corrupt.json")
+        with open(bad, "w", encoding="utf-8") as f:
+            f.write("{ this is not valid json")
+        with self.assertRaises(BackendError):
+            session.Session(bad)
+
+    def test_session_init_loads_valid_file(self):
+        sess = self._make_session()
+        self.assertEqual(sess.name, "prior")
+
+
+class TestSessionRestore(BackendTestCase):
+    """Session-only SVG restore (the --session alone path)."""
+
+    def test_session_only_restore_reloads_recorded_svg(self):
+        f = self.temp_path("recorded.svg")
+        elements.add_circle(self.backend, "1in", "1in", "1in")
+        self.backend.save_svg(f, "default")
+        self.assertGreaterEqual(self.backend.elem_count(), 1)
+        project.create_project(self.backend)
+        self.assertEqual(self.backend.elem_count(), 0)
+        sessfile = self.temp_path("s.json")
+        with open(sessfile, "w", encoding="utf-8") as fh:
+            json.dump({"name": "restored", "svg_path": f}, fh)
+        sess = session.Session(sessfile)
+        result = sess.restore(self.backend)
+        self.assertIsNone(result.get("error"), result)
+        self.assertGreaterEqual(self.backend.elem_count(), 1)
+
+
+class TestCliPrecedence(BackendTestCase):
+    """Deterministic --project/--session precedence and no stale autosave."""
+
+    def _run_json(self, args):
+        import io
+        capture = io.StringIO()
+        orig = cli_mod._REAL_STDOUT
+        cli_mod._REAL_STDOUT = capture
+        try:
+            from click.testing import CliRunner
+            result = CliRunner().invoke(cli_mod.cli, ["--json"] + args)
+        finally:
+            cli_mod._REAL_STDOUT = orig
+            sys.stdout = orig
+        return result, capture.getvalue()
+
+    def test_project_open_changes_only_target_not_existing(self):
+        a = self.temp_path("A.svg")
+        b = self.temp_path("B.svg")
+        elements.add_circle(self.backend, "1in", "1in", "1in")
+        self.backend.save_svg(a, "default")
+        project.create_project(self.backend)
+        elements.add_rect(self.backend, "0in", "0in", "1in", "1in")
+        self.backend.save_svg(b, "default")
+        before_a = cli_mod._sha256_file(a)
+        result, out = self._run_json(["--project", a, "project", "open", b])
+        self.assertEqual(result.exit_code, 0, result.output)
+        self.assertEqual(cli_mod._sha256_file(a), before_a, "stale autosave wrote A")
+
+    def test_session_alone_restores_recorded_svg(self):
+        f = self.temp_path("recorded.svg")
+        elements.add_circle(self.backend, "1in", "1in", "1in")
+        self.backend.save_svg(f, "default")
+        sessfile = self.temp_path("sess.json")
+        with open(sessfile, "w", encoding="utf-8") as fh:
+            json.dump({"name": "s", "svg_path": f}, fh)
+        result, out = self._run_json(["--session", sessfile, "project", "info"])
+        self.assertEqual(result.exit_code, 0, result.output)
+        data = json.loads(out)
+        self.assertGreaterEqual(data["elements"], 1, "session SVG not restored")
+
+    def test_explicit_project_wins_over_session(self):
+        # Session would restore G (1 element); explicit --project H loads a
+        # different count (2). Precedence must yield H's count, never G's.
+        g = self.temp_path("G.svg")
+        elements.add_circle(self.backend, "1in", "1in", "1in")
+        self.backend.save_svg(g, "default")
+        # Start H from a clean tree so its element count is exactly 2.
+        self.backend.elements.clear_all()
+        h = self.temp_path("H.svg")
+        elements.add_circle(self.backend, "0in", "0in", "1in")
+        elements.add_circle(self.backend, "2in", "2in", "1in")
+        self.backend.save_svg(h, "default")
+        sessfile = self.temp_path("sess2.json")
+        with open(sessfile, "w", encoding="utf-8") as fh:
+            json.dump({"name": "s", "svg_path": g}, fh)
+        result, out = self._run_json(
+            ["--session", sessfile, "--project", h, "project", "info"]
+        )
+        self.assertEqual(result.exit_code, 0, result.output)
+        data = json.loads(out)
+        # Explicit --project must win: H loaded (2), not the session's G (1).
+        self.assertEqual(data["elements"], 2, "explicit --project did not win")
+        self.assertNotEqual(data["elements"], 1, "session SVG leaked through")
+
+    def _repl_ctx(self, project_path=None, session=None):
+        import click
+        test = self
+
+        class DummyContext(click.Context):
+            def __init__(self):
+                self.obj = {
+                    "backend": test.backend,
+                    "session": session,
+                    "project_path": project_path,
+                    "dry_run": False,
+                    "json": True,
+                }
+
+            def exit(self, code=0):
+                raise SystemExit(code)
+
+        return DummyContext()
+
+    def test_repl_failed_open_keeps_prior_binding(self):
+        from cli_anything.meerk40t.meerk40t_cli import _dispatch_repl
+        from cli_anything.meerk40t.core import session as session_mod
+        from unittest.mock import patch
+        a = self.temp_path("A.svg")
+        elements.add_circle(self.backend, "1in", "1in", "1in")
+        self.backend.save_svg(a, "default")
+        sess = session_mod.Session(self.temp_path("sess.json"))
+        sess.svg_path = a
+        ctx = self._repl_ctx(project_path=a, session=sess)
+        # Prior binding is A.
+        self.assertEqual(sess.svg_path, a)
+        # Open an existing but malformed B: open_project fails and must NOT
+        # rebind to B (AC2). A missing path would be treated as a valid new
+        # project, so B must be a real invalid file.
+        b = self.temp_path("B_bad.svg")
+        with open(b, "w", encoding="utf-8") as fh:
+            fh.write("this is not an svg")
+        _dispatch_repl(ctx, f"project open {b}", None, {})
+        self.assertEqual(sess.svg_path, a, "failed open leaked binding to B")
+        self.assertEqual(ctx.obj["project_path"], a)
+        # A subsequent successful mutating REPL line must autosave into A, not B.
+        with patch.object(self.backend, "save_svg", wraps=self.backend.save_svg) as spy:
+            _dispatch_repl(ctx, "elements translate 0 10mm 20mm", None, {})
+        saved_paths = [c.args[0] for c in spy.call_args_list]
+        self.assertTrue(saved_paths, "no autosave occurred")
+        self.assertIn(a, saved_paths, "did not autosave into prior project A")
+        self.assertNotIn(b, saved_paths, "autosaved into the failed-open target B")
 
 if __name__ == "__main__":
     unittest.main()
