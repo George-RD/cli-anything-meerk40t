@@ -20,7 +20,10 @@ from cli_anything.meerk40t.core import export as export_mod
 from cli_anything.meerk40t.core import operations as operations_mod
 from cli_anything.meerk40t.core import project as project_mod
 from cli_anything.meerk40t.core import session as session_mod
-from cli_anything.meerk40t.utils.meerk40t_backend import Meerk40tBackend
+from cli_anything.meerk40t.utils.meerk40t_backend import (
+    BackendError,
+    Meerk40tBackend,
+)
 from cli_anything.meerk40t.utils import profiles as profiles_mod
 from cli_anything.meerk40t.utils import submit as submit_mod
 from cli_anything.meerk40t.utils import attach_client as attach_client_mod
@@ -135,45 +138,204 @@ def _emit_human(data: Any) -> None:
         click.echo(str(data))
 
 
-def _emit(ctx: click.Context, data: Any) -> None:
-    """Emit a result as JSON or human-readable text depending on --json."""
+def _emit_now(ctx: click.Context, data: Any) -> None:
+    """Emit a result immediately as JSON or human-readable text (--json)."""
     if ctx.obj.get("json"):
         click.echo(json.dumps(data, indent=2, default=str))
     else:
         _emit_human(data)
 
 
-# ── Auto-save helper ──────────────────────────────────────────────────────────
+def _emit(ctx: click.Context, data: Any) -> None:
+    """Emit a result, buffering it while inside a mutating command or REPL line.
+
+    Buffering lets the completion boundary emit exactly once, only after persistence
+    is proven, and discard the output if the command ultimately fails. A buffered
+    failure payload marks the command as failed so the boundary can classify it.
+    """
+    buffer = ctx.obj.get("_capture")
+    if buffer is not None:
+        if isinstance(data, dict) and (data.get("error") is not None or data.get("ok") is False):
+            ctx.obj["_capture_failed"] = True
+        buffer.append(data)
+        return
+    _emit_now(ctx, data)
 
 
-def _auto_save(ctx: click.Context) -> None:
-    """Save the session (and backing SVG) after a mutating command."""
+def _begin_capture(ctx: click.Context) -> None:
+    ctx.obj["_capture"] = []
+    ctx.obj["_capture_failed"] = False
+
+
+def _flush_capture(ctx: click.Context) -> bool:
+    """Emit any buffered output exactly once, then clear the buffer.
+
+    Returns True if the buffer was non-empty (so callers avoid re-emitting the
+    returned result).
+    """
+    buffer = ctx.obj.get("_capture")
+    if not buffer:
+        ctx.obj["_capture"] = None
+        return False
+    ctx.obj["_capture"] = None
+    for item in buffer:
+        _emit_now(ctx, item)
+    return True
+
+
+def _discard_capture(ctx: click.Context) -> None:
+    ctx.obj["_capture"] = None
+
+
+def _repl_exit(ctx: click.Context, code: int, repl: bool) -> int:
+    if repl:
+        return code
+    ctx.exit(code)
+
+
+def _autosave_once(ctx: click.Context) -> None:
+    """Persist the active session/project after a successful mutating command.
+
+    Raises BackendError (or any persistence exception) so the completion boundary
+    can convert it into a single structured failure. Never swallows errors.
+    """
     if ctx.obj.get("dry_run"):
         return
     backend = ctx.obj.get("backend")
     sess = ctx.obj.get("session")
     project_path = ctx.obj.get("project_path")
-    if sess and getattr(sess, "svg_path", None):
+    if not sess and project_path:
+        backend.save_svg(project_path)
+    elif sess and getattr(sess, "svg_path", None):
         sess.save(backend)
-    elif project_path:
-        # Persist back to the project SVG directly when --project was given.
+
+
+def _complete_command(ctx: click.Context, result: Any, *, mutating: bool = False,
+                      repl: bool = False, on_success=None) -> int:
+    """Single completion boundary for every command and REPL line.
+
+    Classifies ``result`` (or any buffered failure payload) as success/failure,
+    auto-saves exactly once after a proven successful mutation, fires
+    ``on_success`` only once persistence is confirmed, flushes buffered output
+    exactly once, and sets the process exit code. In REPL mode it returns the
+    code instead of calling ``ctx.exit`` so the loop can continue.
+    """
+    is_failure = (
+        isinstance(result, dict)
+        and (result.get("error") is not None or result.get("ok") is False)
+    ) or ctx.obj.get("_capture_failed")
+    if is_failure:
+        # Command-level failure: show output the command already produced, then
+        # emit the error only if nothing was buffered.
+        gate = isinstance(result, dict) and result.get("acknowledgeable_gate")
+        code = 2 if gate else 1
+        if not _flush_capture(ctx):
+            _emit_now(ctx, result)
+        return _repl_exit(ctx, code, repl)
+    if mutating and not ctx.obj.get("dry_run"):
         try:
-            backend.save_svg(project_path)
-        except Exception:
-            pass
+            _autosave_once(ctx)
+        except BackendError as exc:
+            # Persistence failed AFTER a successful command: discard the buffered
+            # success output and report only the persistence error.
+            _discard_capture(ctx)
+            _emit_now(
+                ctx,
+                {"error": str(exc), "path": exc.path, "category": exc.category},
+            )
+            return _repl_exit(ctx, 1, repl)
+        except Exception as exc:  # noqa: BLE001 - convert any persistence fault
+            _discard_capture(ctx)
+            _emit_now(
+                ctx,
+                {"error": f"autosave failed: {exc}", "category": "infrastructure"},
+            )
+            return _repl_exit(ctx, 1, repl)
+    if callable(on_success):
+        on_success()
+    # Proven success: emit buffered output exactly once. If the command
+    # returned a result dict without emitting (e.g. REPL branches that
+    # assign ``result = core(...)``), emit that once.
+    if not _flush_capture(ctx) and result is not None:
+        _emit_now(ctx, result)
+    return _repl_exit(ctx, 0, repl)
 
 
 def mutating(f):
-    """Decorator that auto-saves the active session after a mutating command."""
+    """Decorator that routes a mutating command through the completion boundary.
 
+    The command emits via ``_emit`` (buffered); the boundary flushes that output
+    exactly once after autosave succeeds, converts any uncaught exception into a
+    single failure payload, and sets the exit code. Commands never call
+    ``ctx.exit`` and never emit on failure themselves.
+    """
     @functools.wraps(f)
     def wrapper(*args, **kwargs):
         ctx = click.get_current_context()
-        result = f(*args, **kwargs)
-        _auto_save(ctx)
-        return result
+        _begin_capture(ctx)
+        try:
+            result = f(*args, **kwargs)
+        except BackendError as exc:
+            return _complete_command(
+                ctx,
+                {"error": str(exc), "path": exc.path, "category": exc.category},
+                mutating=True,
+            )
+        except Exception as exc:  # noqa: BLE001 - convert any command fault once
+            return _complete_command(
+                ctx,
+                {"error": str(exc) or exc.__class__.__name__, "category": "infrastructure"},
+                mutating=True,
+            )
+        return _complete_command(ctx, result, mutating=True)
 
+    wrapper._routes_outcome = True
     return wrapper
+
+
+class OutcomeCommand(click.Command):
+    """Route every CLI command through the completion boundary so a structured
+    failure yields a nonzero exit code and output is emitted exactly once.
+
+    Commands already wrapped by ``@mutating`` route themselves (marked
+    ``_routes_outcome``) and are invoked directly. Commands that manage their
+    own exit via ``ctx.exit`` raise ``click.exceptions.Exit``; their buffered
+    output is flushed and the chosen exit code is preserved.
+    """
+
+    def invoke(self, ctx: click.Context):
+        callback = self.callback
+        if getattr(callback, "_routes_outcome", False):
+            return super().invoke(ctx)
+        _begin_capture(ctx)
+        try:
+            result = super().invoke(ctx)
+        except (click.exceptions.Exit, click.exceptions.Abort):
+            _flush_capture(ctx)
+            raise
+        except BackendError as exc:
+            return _complete_command(
+                ctx,
+                {"error": str(exc), "path": exc.path, "category": exc.category},
+            )
+        except Exception as exc:  # noqa: BLE001 - convert any command fault once
+            return _complete_command(
+                ctx,
+                {"error": str(exc) or exc.__class__.__name__, "category": "infrastructure"},
+            )
+        return _complete_command(ctx, result)
+
+
+class OutcomeGroup(click.Group):
+    """Subgroup type whose commands and nested groups route through the boundary."""
+
+    command_class = OutcomeCommand
+    group_class = "OutcomeGroup"
+
+
+OutcomeGroup.group_class = OutcomeGroup
+MeerkGroup.command_class = OutcomeCommand
+MeerkGroup.group_class = OutcomeGroup
 
 
 # ── Main CLI group ───────────────────────────────────────────────────────────
@@ -841,10 +1003,8 @@ def export_png_cmd(ctx: click.Context, path: str, dpi: int):
     try:
         _emit(ctx, export_mod.export_png(ctx.obj["backend"], path, dpi=dpi))
     except RuntimeError as exc:
-        if ctx.obj.get("json"):
-            click.echo(json.dumps({"error": str(exc)}, indent=2))
-        else:
-            click.echo(f"Error: {exc}", err=True)
+        _emit(ctx, {"error": str(exc)})
+        return {"error": str(exc)}
 
 
 @export.command("gcode")
@@ -857,12 +1017,8 @@ def export_gcode_cmd(ctx: click.Context, path: str, allow_full_power: bool):
     try:
         _emit(ctx, export_mod.export_gcode(ctx.obj["backend"], path, allow_full_power=allow_full_power))
     except RuntimeError as exc:
-        if ctx.obj.get("json"):
-            click.echo(json.dumps({"error": str(exc)}, indent=2))
-        else:
-            click.echo(f"Error: {exc}", err=True)
-
-
+        _emit(ctx, {"error": str(exc)})
+        return {"error": str(exc)}
 # ── Console passthrough ───────────────────────────────────────────────────────
 
 
@@ -942,7 +1098,7 @@ def session_status(ctx: click.Context):
 # ── REPL ─────────────────────────────────────────────────────────────────────
 
 
-@cli.command("repl")
+@cli.command("repl", cls=click.Command)
 @click.pass_context
 def repl(ctx: click.Context):
     """Run the interactive REPL."""
@@ -981,7 +1137,35 @@ def repl(ctx: click.Context):
     skin.print_goodbye()
 
 
-def _dispatch_repl(ctx: click.Context, line: str, skin: ReplSkin, commands: dict[str, str]) -> None:
+_REPL_READONLY = {
+    ("project", "info"),
+    ("project", "close"),
+    ("elements", "list"),
+    ("elements", "help"),
+    ("operations", "list"),
+    ("operations", "help"),
+    ("device", "list"),
+    ("device", "status"),
+    ("device", "info"),
+    ("device", "help"),
+    ("export", "svg"),
+    ("export", "svgz"),
+    ("export", "png"),
+    ("export", "gcode"),
+    ("export", "help"),
+    ("session", "status"),
+    ("session", "history"),
+    ("session", "help"),
+}
+
+
+def _repl_is_readonly(group: str, sub: str) -> bool:
+    """True for REPL commands that do not mutate the project state."""
+    if group == "help":
+        return True
+    return (group, sub) in _REPL_READONLY
+
+def _dispatch_repl(ctx: click.Context, line: str, skin: ReplSkin, commands: dict[str, str]) -> int:
     """Token-based REPL dispatcher that calls the core modules directly."""
     tokens = line.split()
     group = tokens[0]
@@ -989,6 +1173,9 @@ def _dispatch_repl(ctx: click.Context, line: str, skin: ReplSkin, commands: dict
     backend = ctx.obj["backend"]
     sess = ctx.obj.get("session")
     result: Any = None
+    # Capture all emitted output so the completion boundary can emit exactly
+    # once, after persistence is proven, and discard it on failure.
+    _begin_capture(ctx)
 
     try:
         if group == "console":
@@ -1242,18 +1429,22 @@ def _dispatch_repl(ctx: click.Context, line: str, skin: ReplSkin, commands: dict
         else:
             result = {"error": f"Unknown command group: {group}"}
     except Exception as exc:
-        result = {"error": str(exc)}
+        result = {"error": str(exc) or exc.__class__.__name__, "category": "infrastructure"}
 
-    # Record and auto-save for the REPL unless it is a non-mutating query.
-    if sess and line.strip() not in ("help", "status"):
-        sess.record_command(line)
-    if sess and not ctx.obj.get("dry_run") and getattr(sess, "svg_path", None):
-        try:
-            sess.save(backend)
-        except Exception:
-            pass
-
-    _emit(ctx, result)
+    # Route through the single completion boundary: classify, auto-save once
+    # after a proven successful mutation, emit buffered output exactly once, and
+    # record the command only after persistence is confirmed. Read-only queries
+    # (info/status/list/history/help and exports) do not auto-save.
+    is_mutating = not _repl_is_readonly(group, rest[0] if rest else "help")
+    if result is not None:
+        _emit(ctx, result)
+    return _complete_command(
+        ctx,
+        result,
+        mutating=is_mutating,
+        repl=True,
+        on_success=(lambda: sess.record_command(line)) if (sess and is_mutating) else None,
+    )
 
 
 # ── Preflight (shared by `job preflight` and `attach stage`) ────────────────
