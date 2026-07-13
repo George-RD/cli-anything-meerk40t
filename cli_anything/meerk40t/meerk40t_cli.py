@@ -1601,7 +1601,7 @@ def _run_preflight(
                     failures.append(
                         "material settings changed since prepare - re-run job prepare"
                     )
-        except ValueError as exc:
+        except (ValueError, materials_mod.MaterialError) as exc:
             failures.append(f"{exc} - re-run job prepare")
 
     # 3. Re-check the recorded verification verdict.
@@ -1633,7 +1633,10 @@ def _run_preflight(
             # resolved role rather than risk a false tamper rejection.
             present_roles = None
         recorded_estimated = set(manifest.get("estimated_roles", []) or [])
-        mat_gate = materials_mod.load_material(material) if material else None
+        try:
+            mat_gate = materials_mod.load_material(material) if material else None
+        except (ValueError, materials_mod.MaterialError):
+            mat_gate = None
         if mat_gate is not None:
             try:
                 resolved = materials_mod.resolve_settings(mat_gate, machine)
@@ -1716,7 +1719,12 @@ def materials_list(ctx):
 @click.pass_context
 def materials_show(ctx, name, machine):
     """Show a material profile, or one machine's role settings with --machine."""
-    material = materials_mod.load_material(name)
+    try:
+        material = materials_mod.load_material(name)
+    except materials_mod.MaterialError as exc:
+        _emit(ctx, {"error": str(exc), "category": "material"})
+        sys.stdout = _REAL_STDOUT
+        ctx.exit(1)
     if material is None:
         _emit(
             ctx,
@@ -1746,15 +1754,25 @@ def materials_show(ctx, name, machine):
 @click.pass_context
 def materials_create(ctx, name, description, machine):
     """Create an empty user material (no role settings yet)."""
-    if materials_mod.load_material(name) is not None:
-        _emit(ctx, {"error": f"material {name!r} already exists"})
+    try:
+        if materials_mod.load_material(name) is not None:
+            _emit(ctx, {"error": f"material {name!r} already exists"})
+            sys.stdout = _REAL_STDOUT
+            ctx.exit(1)
+    except materials_mod.MaterialError as exc:
+        _emit(ctx, {"error": str(exc), "category": "material"})
         sys.stdout = _REAL_STDOUT
         ctx.exit(1)
     machines: dict[str, dict] = {}
     if machine is not None:
         machines[machine] = {"roles": {}}
     data = {"name": name, "description": description, "machines": machines}
-    path = materials_mod.save_user_material(name, data)
+    try:
+        path = materials_mod.save_user_material(name, data)
+    except materials_mod.MaterialError as exc:
+        _emit(ctx, {"error": str(exc), "category": "material"})
+        sys.stdout = _REAL_STDOUT
+        ctx.exit(1)
     _emit(
         ctx,
         {
@@ -1788,7 +1806,12 @@ def materials_record(ctx, name, machine, role, power, speed, passes, provenance,
         )
         sys.stdout = _REAL_STDOUT
         ctx.exit(1)
-    material = materials_mod.load_material(name)
+    try:
+        material = materials_mod.load_material(name)
+    except materials_mod.MaterialError as exc:
+        _emit(ctx, {"error": str(exc), "category": "material"})
+        sys.stdout = _REAL_STDOUT
+        ctx.exit(1)
     if material is None:
         _emit(
             ctx,
@@ -1810,7 +1833,12 @@ def materials_record(ctx, name, machine, role, power, speed, passes, provenance,
         "provenance": provenance,
         "note": note,
     }
-    path = materials_mod.save_user_material(name, updated)
+    try:
+        path = materials_mod.save_user_material(name, updated)
+    except materials_mod.MaterialError as exc:
+        _emit(ctx, {"error": str(exc), "category": "material"})
+        sys.stdout = _REAL_STDOUT
+        ctx.exit(1)
     _emit(
         ctx,
         {

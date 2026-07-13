@@ -864,5 +864,49 @@ class TestPR24Findings(TestAttachRoundTrip):
         self.assertIsInstance(data["operations"], list)
 
 
+class TestIssue29AtomicMaterials(TestCLISubprocess):
+    """Issue #29 CLI behavior: fail-closed material loading + atomic writes."""
+
+    def _with_config_home(self):
+        prev = os.environ.get("CLI_ANYTHING_CONFIG_HOME")
+        os.environ["CLI_ANYTHING_CONFIG_HOME"] = self.temp_dir
+        return prev
+
+    def _restore_config_home(self, prev):
+        if prev is None:
+            os.environ.pop("CLI_ANYTHING_CONFIG_HOME", None)
+        else:
+            os.environ["CLI_ANYTHING_CONFIG_HOME"] = prev
+
+    def test_materials_corrupt_user_override_exits_nonzero(self):
+        prev = self._with_config_home()
+        try:
+            created = self._json(["materials", "create", "corrupt-e2e",
+                                  "--description", "x"])
+            self.assertEqual(created["created"], "corrupt-e2e")
+            mat_path = os.path.join(self.temp_dir, "materials",
+                                    "corrupt-e2e.json")
+            self.assertTrue(os.path.exists(mat_path))
+            with open(mat_path, "w", encoding="utf-8") as fh:
+                fh.write("{ this is not valid json")
+            res = self._run(["--json", "materials", "show", "corrupt-e2e"])
+        finally:
+            self._restore_config_home(prev)
+        self.assertNotEqual(res.returncode, 0, res.stdout + res.stderr)
+        self.assertNotIn("Traceback", res.stdout + res.stderr)
+        payload = json.loads(res.stdout)
+        self.assertIn("error", payload)
+
+    def test_materials_create_then_show_round_trip(self):
+        prev = self._with_config_home()
+        try:
+            created = self._json(["materials", "create", "rt-e2e",
+                                  "--description", "round trip"])
+            self.assertEqual(created["created"], "rt-e2e")
+            shown = self._json(["materials", "show", "rt-e2e"])
+        finally:
+            self._restore_config_home(prev)
+        self.assertEqual(shown["name"], "rt-e2e")
+        self.assertEqual(shown["description"], "round trip")
 if __name__ == "__main__":
     unittest.main()

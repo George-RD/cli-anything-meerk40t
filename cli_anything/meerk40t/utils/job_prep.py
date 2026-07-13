@@ -23,6 +23,7 @@ from typing import Any, Optional
 from cli_anything.meerk40t.core import export, operations
 from cli_anything.meerk40t.utils.materials import (
     load_material,
+    MaterialError,
     resolve_settings as resolve_material_settings,
 )
 from cli_anything.meerk40t.utils.meerk40t_backend import Meerk40tBackend
@@ -83,7 +84,10 @@ def _load_machine_bed(machine: str) -> tuple[float, float]:
 def _resolve_role_settings(
     material_name: str, machine: str, config_home: Optional[str]
 ) -> dict[str, dict]:
-    material = load_material(material_name, config_home=config_home)
+    try:
+        material = load_material(material_name, config_home=config_home)
+    except MaterialError as exc:
+        raise JobPrepError(str(exc)) from exc
     if material is None:
         raise ValueError(f"unknown material: {material_name!r}")
     return resolve_material_settings(material, machine)

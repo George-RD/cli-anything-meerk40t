@@ -13,6 +13,7 @@ import shutil
 import tempfile
 import unittest
 import unittest.mock
+from unittest.mock import patch
 import xml.etree.ElementTree as ET
 
 from cli_anything.meerk40t.core import elements
@@ -1626,24 +1627,52 @@ class TestJobPrepValidation(JobFixtureTestCase):
         self.assertIn("power", str(ctx.exception))
 
     def test_out_of_range_speed_raises(self):
+        # Finding 5: speed outside >0 is rejected by the materials layer at
+        # save time (fail-closed), so it can never reach prepare_job.
         name = "bad-speed"
-        self._make_value_material(name, self.tmp, speed=0.0)
-        with self.assertRaises(job_prep_mod.JobPrepError) as ctx:
-            job_prep_mod.prepare_job(
-                self.svg, self.out,
-                machine="sculpfun-s9", material=name,
-                color_map={"#ff0000": "cut"}, config_home=self.tmp,
+        with self.assertRaises(materials_mod.MaterialError) as ctx:
+            materials_mod.save_user_material(
+                name,
+                {
+                    "name": name,
+                    "description": "bad speed fixture",
+                    "machines": {
+                        "sculpfun-s9": {
+                            "roles": {
+                                "cut": {
+                                    "kind": "cut", "passes": 1, "power": 650,
+                                    "speed": 0.0, "provenance": "tested", "note": "f",
+                                }
+                            }
+                        }
+                    },
+                },
+                config_home=self.tmp,
             )
         self.assertIn("speed", str(ctx.exception))
 
     def test_out_of_range_passes_raises(self):
+        # Finding 5: passes < 1 is rejected by the materials layer at save time
+        # (fail-closed), so it can never reach prepare_job.
         name = "bad-passes"
-        self._make_value_material(name, self.tmp, passes=0)
-        with self.assertRaises(job_prep_mod.JobPrepError) as ctx:
-            job_prep_mod.prepare_job(
-                self.svg, self.out,
-                machine="sculpfun-s9", material=name,
-                color_map={"#ff0000": "cut"}, config_home=self.tmp,
+        with self.assertRaises(materials_mod.MaterialError) as ctx:
+            materials_mod.save_user_material(
+                name,
+                {
+                    "name": name,
+                    "description": "bad passes fixture",
+                    "machines": {
+                        "sculpfun-s9": {
+                            "roles": {
+                                "cut": {
+                                    "kind": "cut", "passes": 0, "power": 650,
+                                    "speed": 16.0, "provenance": "tested", "note": "f",
+                                }
+                            }
+                        }
+                    },
+                },
+                config_home=self.tmp,
             )
         self.assertIn("passes", str(ctx.exception))
 
@@ -2363,3 +2392,246 @@ class TestCliPrecedence(BackendTestCase):
 
 if __name__ == "__main__":
     unittest.main()
+class TestMaterialAtomicity(BackendTestCase):
+    """Issue #29: atomic, fail-closed material loading and writes.
+
+    RED: every behavioral test fails before the strict loader / atomic writer
+    land (load silently returns bad data; save is non-atomic and unvalidated).
+    GREEN: passes after.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.tmp = tempfile.mkdtemp(prefix="mat-at-")
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp, ignore_errors=True)
+        super().tearDown()
+
+    # ── helpers ──────────────────────────────────────────────────────────
+    def _role(self, **over):
+        r = {"kind": "cut", "passes": 1, "power": 500, "speed": 16.0,
+             "provenance": "estimated", "note": "t"}
+        r.update(over)
+        return r
+
+    def _wrap(self, name, role):
+        return {"name": name, "machines": {"sculpfun-s9": {"roles": {"cut": role}}}}
+
+    def _write_raw(self, name, text):
+        d = os.path.join(self.tmp, "materials")
+        os.makedirs(d, exist_ok=True)
+        p = os.path.join(d, f"{name}.json")
+        with open(p, "w", encoding="utf-8") as fh:
+            fh.write(text)
+        return p
+
+    def _write_material(self, name, role_over=None, *, drop_role=(), drop_top=()):
+        role = self._role(**(role_over or {}))
+        for k in drop_role:
+            role.pop(k, None)
+        data = self._wrap(name, role)
+        for k in drop_top:
+            data.pop(k, None)
+        return self._write_raw(name, json.dumps(data))
+
+    def _save_valid(self, name="good"):
+        return materials_mod.save_user_material(
+            name, self._wrap(name, self._role()), config_home=self.tmp
+        )
+
+    # ── Group A: non-finite values must be rejected (load side) ──────────
+    def test_nan_power_rejected(self):
+        self._write_material("nanpow", {"power": float("nan")})
+        with self.assertRaises(materials_mod.MaterialError):
+            materials_mod.load_material("nanpow", config_home=self.tmp)
+
+    def test_infinity_speed_rejected(self):
+        self._write_material("infspeed", {"speed": float("inf")})
+        with self.assertRaises(materials_mod.MaterialError):
+            materials_mod.load_material("infspeed", config_home=self.tmp)
+
+    def test_neg_infinity_passes_rejected(self):
+        self._write_material("neginfpass", {"passes": float("-inf")})
+        with self.assertRaises(materials_mod.MaterialError):
+            materials_mod.load_material("neginfpass", config_home=self.tmp)
+
+    # ── Group B: invalid values rejected (load side) ─────────────────────
+    def test_non_numeric_power_rejected(self):
+        self._write_material("strpow", {"power": "high"})
+        with self.assertRaises(materials_mod.MaterialError):
+            materials_mod.load_material("strpow", config_home=self.tmp)
+
+    def test_zero_power_rejected(self):
+        self._write_material("zeropow", {"power": 0})
+        with self.assertRaises(materials_mod.MaterialError):
+            materials_mod.load_material("zeropow", config_home=self.tmp)
+
+    def test_negative_power_rejected(self):
+        self._write_material("negpow", {"power": -5})
+        with self.assertRaises(materials_mod.MaterialError):
+            materials_mod.load_material("negpow", config_home=self.tmp)
+
+    def test_zero_speed_rejected(self):
+        self._write_material("zerospeed", {"speed": 0})
+        with self.assertRaises(materials_mod.MaterialError):
+            materials_mod.load_material("zerospeed", config_home=self.tmp)
+
+    def test_negative_speed_rejected(self):
+        self._write_material("negspeed", {"speed": -1.0})
+        with self.assertRaises(materials_mod.MaterialError):
+            materials_mod.load_material("negspeed", config_home=self.tmp)
+
+    def test_zero_passes_rejected(self):
+        self._write_material("zeropass", {"passes": 0})
+        with self.assertRaises(materials_mod.MaterialError):
+            materials_mod.load_material("zeropass", config_home=self.tmp)
+
+    def test_negative_passes_rejected(self):
+        self._write_material("negpass", {"passes": -2})
+        with self.assertRaises(materials_mod.MaterialError):
+            materials_mod.load_material("negpass", config_home=self.tmp)
+
+    # ── Group C: malformed nested structure rejected (load side) ─────────
+    def test_missing_machines_rejected(self):
+        self._write_material("nomach", drop_top=("machines",))
+        with self.assertRaises(materials_mod.MaterialError):
+            materials_mod.load_material("nomach", config_home=self.tmp)
+
+    def test_machines_not_dict_rejected(self):
+        self._write_raw("machlist", json.dumps({"name": "machlist",
+            "machines": ["sculpfun-s9"]}))
+        with self.assertRaises(materials_mod.MaterialError):
+            materials_mod.load_material("machlist", config_home=self.tmp)
+
+    def test_roles_not_dict_rejected(self):
+        self._write_raw("rolelist", json.dumps({"name": "rolelist",
+            "machines": {"sculpfun-s9": {"roles": []}}}))
+        with self.assertRaises(materials_mod.MaterialError):
+            materials_mod.load_material("rolelist", config_home=self.tmp)
+
+    def test_role_missing_kind_rejected(self):
+        self._write_material("nokind", drop_role=("kind",))
+        with self.assertRaises(materials_mod.MaterialError):
+            materials_mod.load_material("nokind", config_home=self.tmp)
+
+    # ── Group D: fail-closed precedence + preservation ───────────────────
+    def test_corrupt_user_override_raises_not_falls_back(self):
+        # A corrupt user override of a BUNDLED name must raise, never return
+        # the bundled material (closes the silent-fallback bug).
+        self._write_raw("kraft-350gsm", "{ not valid json")
+        with self.assertRaises(materials_mod.MaterialError):
+            materials_mod.load_material("kraft-350gsm", config_home=self.tmp)
+
+    def test_corrupt_user_override_preserves_prior_bytes(self):
+        p = self._save_valid("mypreserve")
+        original = open(p, "rb").read()
+        with open(p, "w", encoding="utf-8") as fh:
+            fh.write("{ corrupt")
+        with self.assertRaises(materials_mod.MaterialError):
+            materials_mod.load_material("mypreserve", config_home=self.tmp)
+        # File must NOT have been repaired or truncated to something else.
+        after = open(p, "rb").read()
+        self.assertEqual(after, b"{ corrupt")
+        self.assertNotEqual(after, original)
+
+    # ── Group E: atomic write cannot corrupt the prior file ──────────────
+    def test_atomic_replace_failure_preserves_prior(self):
+        p = self._save_valid("apsafe")
+        prior = open(p, "rb").read()
+
+        def boom(src, dst):
+            raise OSError("disk full")
+
+        with patch("os.replace", boom):
+            with self.assertRaises(OSError):
+                materials_mod.save_user_material(
+                    "apsafe", self._wrap("apsafe", self._role(power=700)),
+                    config_home=self.tmp)
+        self.assertEqual(open(p, "rb").read(), prior)
+
+    def test_atomic_fsync_failure_preserves_prior(self):
+        p = self._save_valid("afsafe")
+        prior = open(p, "rb").read()
+
+        def boom(fd):
+            raise OSError("fsync failed")
+
+        with patch("os.fsync", boom):
+            with self.assertRaises(OSError):
+                materials_mod.save_user_material(
+                    "afsafe", self._wrap("afsafe", self._role(power=710)),
+                    config_home=self.tmp)
+        self.assertEqual(open(p, "rb").read(), prior)
+
+    def test_atomic_temp_cleaned_on_failure(self):
+        def boom(src, dst):
+            raise OSError("replace failed")
+
+        with patch("os.replace", boom):
+            with self.assertRaises(OSError):
+                materials_mod.save_user_material(
+                    "aclean", self._wrap("aclean", self._role()),
+                    config_home=self.tmp)
+        tmp_files = [f for f in os.listdir(os.path.join(self.tmp, "materials"))
+                     if ".tmp-" in f or f.endswith(".tmp")]
+        self.assertEqual(tmp_files, [])
+
+    def test_atomic_swap_keeps_reader_consistent(self):
+        # At the moment of swap the destination still holds the OLD, complete,
+        # parseable content — never a truncated temp file.
+        p = self._save_valid("aswap")
+        real_replace = os.replace
+        seen = {}
+
+        def spy(src, dst):
+            with open(dst, "r", encoding="utf-8") as fh:
+                seen["parsed"] = json.load(fh)
+            return real_replace(src, dst)
+
+        with patch("os.replace", spy):
+            materials_mod.save_user_material(
+                "aswap", self._wrap("aswap", self._role(power=1)),
+                config_home=self.tmp)
+        self.assertIn("parsed", seen, "os.replace was never used by the writer")
+        self.assertEqual(seen["parsed"]["machines"]["sculpfun-s9"]
+                         ["roles"]["cut"]["power"], 500)
+
+    # ── Group F: contract preservation (green both before and after) ──────
+    def test_valid_material_round_trips(self):
+        self._save_valid("rt")
+        mat = materials_mod.load_material("rt", config_home=self.tmp)
+        self.assertIsNotNone(mat)
+        role = mat["machines"]["sculpfun-s9"]["roles"]["cut"]
+        self.assertEqual(role["power"], 500)
+        self.assertEqual(role["speed"], 16.0)
+        self.assertEqual(role["passes"], 1)
+
+    def test_unknown_name_returns_none(self):
+        self.assertIsNone(
+            materials_mod.load_material("ghost", config_home=self.tmp))
+
+    def test_list_materials_skips_corrupt(self):
+        self._save_valid("ok1")
+        self._write_raw("broken", "{ broken json")
+        names = [m["name"] for m in materials_mod.list_materials(config_home=self.tmp)]
+        self.assertIn("ok1", names)
+        self.assertNotIn("broken", names)
+
+    # ── Group AC8: save validates before writing, never mutates prior ────
+    def test_save_rejects_invalid_keeps_prior(self):
+        p = self._save_valid("ac8keep")
+        with open(p, "rb") as fh:
+            prior = fh.read()
+        bad = self._wrap("ac8keep", self._role(power=0))
+        with self.assertRaises(materials_mod.MaterialError):
+            materials_mod.save_user_material("ac8keep", bad, config_home=self.tmp)
+        with open(p, "rb") as fh:
+            self.assertEqual(fh.read(), prior)
+
+    def test_save_rejects_invalid_new_material(self):
+        bad = self._wrap("ac8new", self._role(power=-1))
+        with self.assertRaises(materials_mod.MaterialError):
+            materials_mod.save_user_material("ac8new", bad, config_home=self.tmp)
+        self.assertFalse(
+            os.path.exists(os.path.join(self.tmp, "materials", "ac8new.json")))

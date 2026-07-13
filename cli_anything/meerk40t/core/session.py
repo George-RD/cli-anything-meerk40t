@@ -5,6 +5,7 @@ import time
 
 from cli_anything.meerk40t.utils.meerk40t_backend import BackendError
 from .project import open_project
+from cli_anything.meerk40t.utils.atomic_io import atomic_write_json
 
 
 class Session:
@@ -60,36 +61,9 @@ class Session:
         return {"saved": True, "path": self.session_path}
 
     def _locked_save_json(self, path, data):
-        try:
-            import fcntl
-        except ImportError:
-            fcntl = None
-
-        directory = os.path.dirname(os.path.abspath(path)) or "."
-        fd, tmp = tempfile.mkstemp(suffix=".json", prefix=".mksess-", dir=directory)
-        try:
-            with os.fdopen(fd, "w", encoding="utf-8") as f:
-                json.dump(data, f, indent=2)
-                f.flush()
-                os.fsync(f.fileno())
-            if fcntl is not None:
-                lock_fd = os.open(path, os.O_RDONLY | os.O_CREAT, 0o644)
-                try:
-                    fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-                    os.replace(tmp, path)
-                finally:
-                    fcntl.flock(lock_fd, fcntl.LOCK_UN)
-                    os.close(lock_fd)
-            else:
-                # Non-POSIX (e.g. Windows): advisory locking unavailable.
-                os.replace(tmp, path)
-        except Exception:
-            try:
-                if os.path.exists(tmp):
-                    os.remove(tmp)
-            except Exception:
-                pass
-            raise
+        # Shared atomic+durable persistence primitive (also used for material
+        # profiles), so session state and material writes keep one convention.
+        atomic_write_json(path, data)
 
     def record_command(self, cmd):
         self.history.append({"cmd": cmd, "ts": time.time()})
