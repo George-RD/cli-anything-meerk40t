@@ -1,7 +1,7 @@
 # Backend Contract — cli-anything-meerk40t
 
 The shared backend module is **already implemented and verified** at:
-`agent-harness/cli_anything/meerk40t/utils/meerk40t_backend.py`
+`cli_anything/meerk40t/utils/meerk40t_backend.py`
 
 Import it as:
 ```python
