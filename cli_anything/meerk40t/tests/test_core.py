@@ -1646,7 +1646,10 @@ class TestJobManifest(JobFixtureTestCase):
         self.assertEqual(manifest["schema"], "clia-job-manifest-v1")
         for fname in ("input_svg", "job_svg", "gcode"):
             entry = manifest["files"][fname]
-            actual = cli_mod._sha256_file(entry["path"])
+            apath = os.path.normpath(
+                os.path.join(os.path.dirname(self.manifest_path), entry["path"])
+            )
+            actual = cli_mod._sha256_file(apath)
             self.assertEqual(actual, entry["sha256"], fname)
 
     def test_preflight_rejects_tampered_gcode(self):
@@ -1655,7 +1658,10 @@ class TestJobManifest(JobFixtureTestCase):
         os.environ["CLI_ANYTHING_CONFIG_HOME"] = self.tmp
         try:
             with open(self.manifest_path, encoding="utf-8") as fh:
-                gcode_path = json.loads(fh.read())["files"]["gcode"]["path"]
+                gcode_rel = json.loads(fh.read())["files"]["gcode"]["path"]
+            gcode_path = os.path.normpath(
+                os.path.join(os.path.dirname(self.manifest_path), gcode_rel)
+            )
             with open(gcode_path, "a", encoding="utf-8") as fh:
                 fh.write("; tampered\n")
             result, code = cli_mod._run_preflight(

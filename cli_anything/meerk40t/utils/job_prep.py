@@ -28,6 +28,12 @@ from cli_anything.meerk40t.utils.materials import (
 )
 from cli_anything.meerk40t.utils.meerk40t_backend import Meerk40tBackend
 from cli_anything.meerk40t.utils.profiles import load_profile
+from cli_anything.meerk40t.utils.gcode_modal import verify_gcode
+from cli_anything.meerk40t.utils.manifest import (
+    validate_manifest,
+    strict_load_json,
+    ManifestValidationError,
+)
 
 DEFAULT_COLOR_MAP = {"#ff0000": "cut", "#0000ff": "score", "#000000": "etch"}
 BURN_ORDER = ["etch", "score", "cut"]
@@ -151,9 +157,11 @@ def _assign_elements_by_color(backend: Meerk40tBackend) -> tuple[dict[str, int],
     """Assign every loaded element to the operation matching its stroke colour.
 
     Returns (counts by colour, descriptions of unassigned drawable elements).
-    Elements with no stroke at all (containers, structural nodes) are skipped;
-    a drawable element with an unrecognised stroke colour is reported so the
-    job cannot silently drop geometry.
+    Elements with neither a real stroke nor a real fill (containers, structural
+    nodes) are skipped. A drawable element whose stroke has no matching operation
+    is reported, AND a fill-only element (no mappable stroke but a real fill) is
+    reported too, so the job cannot silently drop artwork that lives only in a
+    fill colour.
     """
     ops = backend.ops()
     color_to_op: dict[str, Any] = {}
@@ -164,15 +172,23 @@ def _assign_elements_by_color(backend: Meerk40tBackend) -> tuple[dict[str, int],
     counts: dict[str, int] = {}
     unassigned: list[str] = []
     for e in backend.elems():
-        raw = getattr(e, "stroke", None)
-        stroke = str(raw or "").lower()
+        raw_stroke = getattr(e, "stroke", None)
+        stroke = str(raw_stroke or "").lower()
         op = color_to_op.get(stroke)
-        if op is None:
-            if raw is not None and stroke not in ("", "none"):
-                unassigned.append(f"{getattr(e, 'type', '?')} stroke={stroke}")
+        if op is not None:
+            op.add_reference(e)
+            counts[stroke] = counts.get(stroke, 0) + 1
             continue
-        op.add_reference(e)
-        counts[stroke] = counts.get(stroke, 0) + 1
+        # No operation mapped to this stroke. Flag any drawable element: one
+        # with a real unmatched stroke OR a real fill (fill-only artwork).
+        raw_fill = getattr(e, "fill", None)
+        fill = str(raw_fill or "").lower()
+        has_stroke = raw_stroke is not None and stroke not in ("", "none")
+        has_fill = raw_fill is not None and fill not in ("", "none")
+        if has_stroke:
+            unassigned.append(f"{getattr(e, 'type', '?')} stroke={stroke}")
+        elif has_fill:
+            unassigned.append(f"{getattr(e, 'type', '?')} fill={fill}")
     return counts, unassigned
 
 
@@ -185,88 +201,6 @@ def _set_bed_and_realize(backend: Meerk40tBackend, machine: str) -> None:
     dev.bedwidth = f"{bed_w}mm"
     dev.bedheight = f"{bed_h}mm"
     dev.realize()
-
-
-def _parse_gcode(
-    gcode_text: str, *, bed_width: float, bed_height: float, valid_burn_s: set[int]
-) -> dict[str, Any]:
-    """Parse G-code for bounds, S values, and structural checks."""
-    lines = [line.strip() for line in gcode_text.splitlines()]
-    non_empty = [line for line in lines if line]
-
-    x_vals: list[float] = []
-    y_vals: list[float] = []
-    s_values: set[int] = set()
-    g1_s_values: set[int] = set()
-    travel_s0_ok = True
-
-    motion_re = re.compile(r"^[GGMm](0|1|00|01)\b")
-
-    for line in non_empty:
-        is_motion = bool(motion_re.match(line))
-        if is_motion:
-            xm = re.search(r"X(-?[\d.]+)", line)
-            ym = re.search(r"Y(-?[\d.]+)", line)
-            if xm:
-                x_vals.append(float(xm.group(1)))
-            if ym:
-                y_vals.append(float(ym.group(1)))
-
-        sm = re.search(r"S(-?[\d.]+)", line)
-        if sm:
-            try:
-                s = int(float(sm.group(1)))
-                s_values.add(s)
-                if line.upper().startswith("G1") or line.upper().startswith("G01"):
-                    g1_s_values.add(s)
-            except ValueError:
-                pass
-
-        if line.upper().startswith("G0") or line.upper().startswith("G00"):
-            if "S0" not in line.upper():
-                travel_s0_ok = False
-
-    header = " ".join(non_empty[:20]).upper()
-    header_ok = "G21" in header and "G90" in header and "M4" in header
-
-    end_ok = False
-    if len(non_empty) >= 2:
-        end_ok = non_empty[-2].upper() == "G1 S0" and non_empty[-1].upper() == "M5"
-
-    x_range = [min(x_vals), max(x_vals)] if x_vals else [0.0, 0.0]
-    y_range = [min(y_vals), max(y_vals)] if y_vals else [0.0, 0.0]
-    in_bounds = (
-        x_range[0] >= 0.0
-        and x_range[1] <= bed_width
-        and y_range[0] >= 0.0
-        and y_range[1] <= bed_height
-    )
-
-    burn_s_ok = all(s in valid_burn_s or s == 0 for s in g1_s_values) and bool(
-        valid_burn_s.intersection(s_values)
-    )
-
-    return {
-        "header_ok": header_ok,
-        "travel_s0_ok": travel_s0_ok,
-        "burn_s_ok": burn_s_ok,
-        "s_values": sorted(s_values),
-        "g1_s_values": sorted(g1_s_values),
-        "end_ok": end_ok,
-        "x_range": x_range,
-        "y_range": y_range,
-        "in_bounds": in_bounds,
-    }
-
-
-def _verify_gcode_file(
-    path: str, *, bed_width: float, bed_height: float, valid_burn_s: set[int]
-) -> dict[str, Any]:
-    with open(path, "r", encoding="utf-8", errors="replace") as f:
-        text = f.read()
-    return _parse_gcode(
-        text, bed_width=bed_width, bed_height=bed_height, valid_burn_s=valid_burn_s
-    )
 
 
 def _human_summary(summary: dict[str, Any]) -> str:
@@ -299,7 +233,7 @@ def _write_manifest(
     *,
     machine: str,
     material: str,
-    files: dict[str, str],
+    files: dict[str, dict[str, str]],
     operations: list[dict],
     estimated_roles: list[str],
     settings_fingerprint: str | None,
@@ -308,7 +242,13 @@ def _write_manifest(
     role: str | None = None,
     powers: list[int] | None = None,
 ) -> Path:
-    """Write a clia-job-manifest-v1 JSON file and return its path."""
+    """Write a clia-job-manifest-v1 JSON file and return its path.
+
+    ``files`` is a precomputed mapping of slot -> {"path": relpath, "sha256": hex}
+    captured once at prepare time; the manifest is written directly from it
+    (never re-read from disk) so the recorded hashes describe the exact bytes
+    that were verified.
+    """
     manifest_path = out_dir / f"{stem}_manifest.json"
     manifest: dict[str, Any] = {
         "schema": "clia-job-manifest-v1",
@@ -317,8 +257,8 @@ def _write_manifest(
         "machine": machine,
         "material": material,
         "files": {
-            name: {"path": str(Path(path).resolve()), "sha256": _sha256_file(path)}
-            for name, path in files.items()
+            name: {"path": entry["path"], "sha256": entry["sha256"]}
+            for name, entry in files.items()
         },
         "operations": operations,
         "estimated_roles": list(estimated_roles),
@@ -418,24 +358,34 @@ def prepare_job(
     if not os.path.exists(gcode_path) or os.path.getsize(gcode_path) == 0:
         raise RuntimeError("G-code export produced no output file")
 
-    valid_powers = {s["power"] for s in settings.values()}
-    verification = _verify_gcode_file(
-        str(gcode_path),
+    # Capture each output buffer EXACTLY ONCE. The verification verdict and the
+    # manifest hashes are computed from these captured bytes and never re-read
+    # from disk afterwards, so the recorded hashes describe the exact bytes that
+    # were verified (defeats a post-capture source swap).
+    gcode_bytes = Path(gcode_path).read_bytes()
+    sha_gcode = hashlib.sha256(gcode_bytes).hexdigest()
+    input_bytes = Path(in_path).read_bytes()
+    sha_input = hashlib.sha256(input_bytes).hexdigest()
+    job_bytes = Path(job_svg_path).read_bytes()
+    sha_job = hashlib.sha256(job_bytes).hexdigest()
+
+    valid_powers = {s["power"] for s in settings.values() if s.get("power")}
+    verification = verify_gcode(
+        gcode_bytes.decode("utf-8", "replace"),
         bed_width=bed_width,
         bed_height=bed_height,
         valid_burn_s=valid_powers,
+        expected_passes=None,
+        is_ladder=False,
     )
+    # Derive the unassigned-element verdict from the per-element assignment
+    # performed above; this MUST be recomputed here, never copied from a stored
+    # value. Fill-only and unmatched-stroke artwork both fail the gate.
     verification["unassigned_elements"] = unassigned
-    verification["no_unassigned"] = not unassigned
-    checks = [
-        verification["header_ok"],
-        verification["travel_s0_ok"],
-        verification["burn_s_ok"],
-        verification["end_ok"],
-        verification["in_bounds"],
-        verification["no_unassigned"],
-    ]
-    verification["all_passed"] = all(checks)
+    verification["no_unassigned"] = len(unassigned) == 0
+    verification["all_passed"] = bool(
+        verification["all_passed"] and verification["no_unassigned"]
+    )
 
     op_summary = []
     for role in BURN_ORDER:
@@ -461,9 +411,18 @@ def prepare_job(
         machine=machine,
         material=material,
         files={
-            "input_svg": str(in_path),
-            "job_svg": str(job_svg_path),
-            "gcode": str(gcode_path),
+            "input_svg": {
+                "path": os.path.relpath(str(in_path), out_path),
+                "sha256": sha_input,
+            },
+            "job_svg": {
+                "path": os.path.relpath(str(job_svg_path), out_path),
+                "sha256": sha_job,
+            },
+            "gcode": {
+                "path": os.path.relpath(str(gcode_path), out_path),
+                "sha256": sha_gcode,
+            },
         },
         operations=op_summary,
         estimated_roles=estimated,
@@ -621,24 +580,32 @@ def prepare_ladder(
     if not os.path.exists(gcode_path) or os.path.getsize(gcode_path) == 0:
         raise RuntimeError("G-code export produced no output file")
 
-    valid_burn_s = set(powers)
-    verification = _verify_gcode_file(
-        str(gcode_path),
+    # Capture each output buffer EXACTLY ONCE (immutable single read).
+    gcode_bytes = Path(gcode_path).read_bytes()
+    sha_gcode = hashlib.sha256(gcode_bytes).hexdigest()
+    svg_bytes = Path(svg_path).read_bytes()
+    sha_svg = hashlib.sha256(svg_bytes).hexdigest()
+
+    verification = verify_gcode(
+        gcode_bytes.decode("utf-8", "replace"),
         bed_width=bed_width,
         bed_height=bed_height,
-        valid_burn_s=valid_burn_s,
+        valid_burn_s=set(powers),
+        expected_passes=len(powers),
+        is_ladder=True,
     )
+    # Ladders have no per-element assignment; every line is deliberate.
     verification["unassigned_elements"] = []
     verification["no_unassigned"] = True
-    checks = [
-        verification["header_ok"],
-        verification["travel_s0_ok"],
-        verification["burn_s_ok"],
-        verification["end_ok"],
-        verification["in_bounds"],
-        verification["no_unassigned"],
-    ]
-    verification["all_passed"] = all(checks)
+    verification["all_passed"] = bool(
+        verification["all_passed"] and verification["no_unassigned"]
+    )
+    # Fail-closed: a ladder whose verification did not pass must NOT emit usable
+    # instructions. Raise immediately rather than recording a bad verdict.
+    if not verification["all_passed"]:
+        raise JobPrepError(
+            "ladder verification failed: " + "; ".join(verification["notes"])
+        )
 
     op_summary = []
     for i, power in enumerate(powers):
@@ -659,9 +626,18 @@ def prepare_ladder(
         machine=machine,
         material="",
         files={
-            "input_svg": str(svg_path),
-            "job_svg": str(svg_path),
-            "gcode": str(gcode_path),
+            "input_svg": {
+                "path": os.path.relpath(str(svg_path), out_path),
+                "sha256": sha_svg,
+            },
+            "job_svg": {
+                "path": os.path.relpath(str(svg_path), out_path),
+                "sha256": sha_svg,
+            },
+            "gcode": {
+                "path": os.path.relpath(str(gcode_path), out_path),
+                "sha256": sha_gcode,
+            },
         },
         operations=op_summary,
         estimated_roles=[],
