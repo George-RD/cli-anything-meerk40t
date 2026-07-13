@@ -19,8 +19,10 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import subprocess
+import tempfile
 import urllib.parse
 from pathlib import Path
 from typing import Any
@@ -228,60 +230,121 @@ def _run(cmd: list[str], cwd: str | None = None, capture: bool = False) -> str:
     return proc.stdout or ""
 
 
+def _fail(stage: str, error: object) -> dict:
+    """Structured, non-raising failure for a given submission stage."""
+    return {"ok": False, "stage": stage, "error": str(error)}
+
+
+def _origin_owner_name(url: str) -> tuple[str | None, str | None]:
+    """Parse (owner, name) from a GitHub clone URL, else (None, None).
+
+    Handles both ``https://github.com/OWNER/NAME(.git)?`` and the SSH form
+    ``git@github.com:OWNER/NAME.git``.
+    """
+    m = re.search(r"github\.com[/:]([^/]+)/(.+?)(?:\.git)?$", (url or "").strip())
+    if not m:
+        return (None, None)
+    return (m.group(1), m.group(2))
+
+
+def _is_already_forked(exc: Exception) -> bool:
+    """True when a fork failure means the fork already exists."""
+    stderr = getattr(exc, "stderr", "") or ""
+    if isinstance(stderr, bytes):
+        stderr = stderr.decode("utf-8", "replace")
+    text = stderr + str(exc)
+    return bool(re.search(r"already (exists|forked)", text, re.I))
+
+
 def _submit_via_gh(name: str, profile: dict, community_file: str) -> dict:
     """Drive the gh CLI to fork, branch, write, and open a PR.
 
-    Best-effort: any failure is reported rather than raising so the caller
-    can fall back to the issue URL. Requires an authenticated ``gh`` session.
+    Runs entirely inside a disposable temp clone so the caller's working
+    tree is never touched. Any failure is reported via ``_fail`` (it never
+    raises) so the caller can fall back to the issue URL. Requires an
+    authenticated ``gh`` session.
     """
-    repo_root = _repo_root()
     branch = f"profile/{name}"
-    try:
-        # Fork only if we do not already have one; ignore "already forked".
-        _run(["gh", "repo", "fork", REPO, "--clone=false"], cwd=repo_root)
-    except subprocess.CalledProcessError:
-        pass
-    _run(["git", "checkout", "-b", branch], cwd=repo_root)
-
-    out_path = Path(repo_root) / community_file
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-    out_path.write_text(json.dumps(profile, indent=2) + "\n", encoding="utf-8")
-
-    _run(["git", "add", str(out_path)], cwd=repo_root)
-    _run(
-        ["git", "commit", "-m", f"Add community profile {name}"],
-        cwd=repo_root,
-    )
-    _run(["git", "push", "-u", "origin", branch], cwd=repo_root)
-
-    pr_url = _run(
-        [
-            "gh",
-            "pr",
-            "create",
-            "--title",
-            f"Community machine profile: {name}",
-            "--body",
-            _issue_body(profile),
-            "--label",
-            "community-profile",
-        ],
-        cwd=repo_root,
-        capture=True,
-    ).strip()
-
-    return {
-        "submitted": True,
-        "method": "pull-request",
-        "branch": branch,
-        "pr_url": pr_url,
-    }
-
-
-def _repo_root() -> str:
-    """Best-effort repository root: the nearest .git ancestor of CWD."""
-    here = Path(os.getcwd()).resolve()
-    for candidate in [here, *here.parents]:
-        if (candidate / ".git").exists():
-            return str(candidate)
-    return str(here)
+    with tempfile.TemporaryDirectory(prefix="clia_submit_") as work:
+        clone_dir = os.path.join(work, "checkout")
+        try:
+            _run(["gh", "repo", "fork", REPO, "--clone=false"], cwd=work, capture=True)
+        except subprocess.CalledProcessError as e:
+            if not _is_already_forked(e):
+                return _fail("fork", e)
+        try:
+            _run(["gh", "repo", "clone", REPO, clone_dir], cwd=work)
+        except subprocess.CalledProcessError as e:
+            return _fail("clone", e)
+        try:
+            origin = _run(
+                ["git", "-C", clone_dir, "remote", "get-url", "origin"],
+                capture=True,
+            ).strip()
+        except subprocess.CalledProcessError as e:
+            return _fail("identity", e)
+        owner, name_ = _origin_owner_name(origin)
+        if (owner, name_) != ("George-RD", "cli-anything-meerk40t"):
+            return _fail("identity", f"unexpected origin: {origin}")
+        try:
+            _run(
+                ["git", "-C", clone_dir, "rev-parse", "--verify", branch],
+                capture=True,
+            )
+        except subprocess.CalledProcessError:
+            pass
+        else:
+            return _fail("checkout", f"branch {branch} already exists locally")
+        try:
+            remote = _run(
+                ["git", "-C", clone_dir, "ls-remote", "--heads", "origin", branch],
+                capture=True,
+            ).strip()
+        except subprocess.CalledProcessError as e:
+            return _fail("checkout", e)
+        if remote:
+            return _fail("checkout", f"branch {branch} already exists on remote")
+        try:
+            _run(["git", "-C", clone_dir, "checkout", "-b", branch], cwd=clone_dir)
+        except subprocess.CalledProcessError as e:
+            return _fail("checkout", e)
+        out_path = Path(clone_dir) / community_file
+        try:
+            out_path.parent.mkdir(parents=True, exist_ok=True)
+            out_path.write_text(json.dumps(profile, indent=2) + "\n", encoding="utf-8")
+        except OSError as e:
+            return _fail("write", e)
+        try:
+            _run(["git", "-C", clone_dir, "add", str(out_path)])
+            _run(
+                ["git", "-C", clone_dir, "commit", "-m", f"Add community profile {name}"],
+            )
+            _run(
+                ["git", "-C", clone_dir, "push", "-u", "origin", branch],
+            )
+        except subprocess.CalledProcessError as e:
+            return _fail("push", e)
+        try:
+            pr_url = _run(
+                [
+                    "gh",
+                    "pr",
+                    "create",
+                    "--title",
+                    f"Community machine profile: {name}",
+                    "--body",
+                    _issue_body(profile),
+                    "--label",
+                    "community-profile",
+                ],
+                cwd=clone_dir,
+                capture=True,
+            ).strip()
+        except subprocess.CalledProcessError as e:
+            return _fail("pr-create", e)
+        return {
+            "submitted": True,
+            "method": "pull-request",
+            "branch": branch,
+            "pr_url": pr_url,
+        }

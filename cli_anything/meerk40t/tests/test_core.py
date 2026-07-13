@@ -1332,35 +1332,408 @@ class TestProfileSubmitUnit(unittest.TestCase):
 
     def test_yes_with_gh_opens_pull_request(self):
         tmp = tempfile.mkdtemp(prefix="mk_sub_")
+        saved = os.getcwd()
+        os.chdir(tmp)
+        res = None
         try:
             fake_pr = "https://github.com/George-RD/cli-anything-meerk40t/pull/1"
+            snap = _snapshot(tmp)
             with unittest.mock.patch(
                 "cli_anything.meerk40t.utils.submit.shutil.which",
                 return_value="/usr/bin/gh",
             ):
+                router = _SubmitRouter(pr_url=fake_pr)
                 with unittest.mock.patch(
-                    "cli_anything.meerk40t.utils.submit.os.getcwd",
-                    return_value=tmp,
+                    "cli_anything.meerk40t.utils.submit.subprocess.run",
+                    router,
                 ):
-                    with unittest.mock.patch(
-                        "cli_anything.meerk40t.utils.submit.subprocess.run",
-                        return_value=subprocess.CompletedProcess(
-                            args=[], returncode=0, stdout=fake_pr
-                        ),
-                    ) as mock_run:
-                        res = submit_mod.submit_profile("sculpfun-s9", yes=True)
+                    res = submit_mod.submit_profile("sculpfun-s9", yes=True)
+        finally:
+            os.chdir(saved)
+        try:
+            self.assertIsNotNone(res)
             self.assertIs(res["submitted"], True)
             self.assertEqual(res["method"], "pull-request")
             self.assertEqual(res["pr_url"], fake_pr)
-            # git/gh were driven, including the `gh pr create` step.
-            commands = [c.args[0] for c in mock_run.call_args_list]
+            # git/gh were driven against the internal clone, not the caller.
+            commands = [c["cmd"] for c in router.calls]
             self.assertTrue(any(c[:2] == ["gh", "pr"] for c in commands))
-            self.assertTrue(any(c[:2] == ["git", "push"] for c in commands))
-            # The profile file was staged in the (temp) repo root.
-            staged = os.path.join(tmp, "profiles", "community", "sculpfun-s9.json")
-            self.assertTrue(os.path.exists(staged))
+            self.assertTrue(
+                any(c[:1] == ["git"] and c[1] == "-C" and "push" in c for c in commands),
+                "expected git push driven inside the clone",
+            )
+            # The profile file was written under the internal clone dir.
+            self.assertIsNotNone(router.clone_dir)
+            add_calls = [
+                el
+                for c in router.calls
+                if c["cmd"][:1] == ["git"] and "add" in c["cmd"]
+                for el in c["cmd"]
+                if isinstance(el, str) and el.startswith(router.clone_dir)
+            ]
+            self.assertTrue(add_calls, "expected a git add of the community file")
+            added = add_calls[0]
+            self.assertTrue(added.startswith(router.clone_dir))
+            self.assertFalse(added.startswith(tmp))
+            # Caller/cwd untouched: no community file landed in the temp dir.
+            self.assertFalse(
+                os.path.exists(
+                    os.path.join(tmp, "profiles", "community", "sculpfun-s9.json")
+                )
+            )
+            _assert_unchanged(tmp, snap)
         finally:
             shutil.rmtree(tmp, ignore_errors=True)
+
+
+# ── Community submission isolation helpers (issue #33) ──────────────────────
+
+class _SubmitRouter:
+    """Mock for ``subprocess.run`` driven by ``submit._submit_via_gh``.
+
+    Captures every call (cmd + cwd) so tests can locate the internal clone
+    dir and assert which stages were reached. Raises ``CalledProcessError``
+    for the configured ``fail_stage``; otherwise returns success.
+    """
+
+    CANONICAL_ORIGIN = "https://github.com/George-RD/cli-anything-meerk40t.git"
+
+    def __init__(
+        self,
+        fail_stage=None,
+        origin=None,
+        fork_error_kind="boom",
+        collision_local=False,
+        collision_remote=False,
+        pr_url="https://github.com/George-RD/cli-anything-meerk40t/pull/99",
+    ):
+        self.fail_stage = fail_stage
+        self.origin = origin if origin is not None else self.CANONICAL_ORIGIN
+        self.fork_error_kind = fork_error_kind
+        self.collision_local = collision_local
+        self.collision_remote = collision_remote
+        self.pr_url = pr_url
+        self.calls = []
+        self.clone_dir = None
+
+    def _branch(self, cmd):
+        return cmd[-1]
+
+    def __call__(self, cmd, *args, **kwargs):
+        c = list(cmd)
+        self.calls.append({"cmd": c, "cwd": kwargs.get("cwd")})
+
+        if c[:2] == ["gh", "repo"] and len(c) > 2 and c[2] == "fork":
+            if self.fail_stage == "fork":
+                msg = "already exists" if self.fork_error_kind == "already" else "boom"
+                raise subprocess.CalledProcessError(1, c, stderr=msg.encode())
+            return self._ok(c)
+        if c[:2] == ["gh", "repo"] and len(c) > 2 and c[2] == "clone":
+            self.clone_dir = c[4]
+            if self.fail_stage == "clone":
+                raise subprocess.CalledProcessError(1, c, stderr=b"clone failed")
+            return self._ok(c)
+        if c[:1] == ["git"] and len(c) > 2 and c[1] == "-C":
+            sub = c[3:]
+            if sub[:2] == ["remote", "get-url"]:
+                if self.fail_stage == "identity_raise":
+                    raise subprocess.CalledProcessError(1, c, stderr=b"no origin")
+                return self._out(c, self.origin)
+            if sub[:2] == ["rev-parse", "--verify"]:
+                if self.collision_local:
+                    return self._out(c, "abc123\n")
+                raise subprocess.CalledProcessError(1, c, stderr=b"absent")
+            if sub[:2] == ["ls-remote", "--heads"]:
+                if self.collision_remote:
+                    return self._out(
+                        c, f"abc123\trefs/heads/{self._branch(c)}\n"
+                    )
+                return self._out(c, "")
+            if sub[:2] == ["checkout", "-b"]:
+                if self.fail_stage == "checkout":
+                    raise subprocess.CalledProcessError(1, c, stderr=b"checkout failed")
+                return self._ok(c)
+            if sub[:1] == ["push"]:
+                if self.fail_stage == "push":
+                    raise subprocess.CalledProcessError(1, c, stderr=b"push failed")
+                return self._ok(c)
+        if c[:2] == ["gh", "pr"]:
+            if self.fail_stage == "pr-create":
+                raise subprocess.CalledProcessError(1, c, stderr=b"pr failed")
+            return self._out(c, self.pr_url)
+        return self._ok(c)
+
+    @staticmethod
+    def _ok(cmd):
+        return subprocess.CompletedProcess(cmd, 0, stdout="")
+
+    @staticmethod
+    def _out(cmd, stdout):
+        return subprocess.CompletedProcess(cmd, 0, stdout=stdout)
+
+
+def _init_caller_repo(path):
+    """Create a real git repo at ``path`` with one committed file."""
+    os.makedirs(path, exist_ok=True)
+    subprocess.run(["git", "init", "-q", path], check=True)
+    subprocess.run(["git", "-C", path, "config", "user.name", "Tester"], check=True)
+    subprocess.run(["git", "-C", path, "config", "user.email", "t@e.st"], check=True)
+    with open(os.path.join(path, "marker.txt"), "w", encoding="utf-8") as fh:
+        fh.write("caller content\n")
+    subprocess.run(["git", "-C", path, "add", "."], check=True)
+    subprocess.run(["git", "-C", path, "commit", "-q", "-m", "init"], check=True)
+
+
+def _snapshot(repo):
+    """Capture git HEAD/branch/remotes and working-tree file bytes."""
+    snap = {}
+    if os.path.isdir(os.path.join(repo, ".git")):
+        snap["head"] = subprocess.run(
+            ["git", "-C", repo, "rev-parse", "HEAD"],
+            capture_output=True, text=True, check=True,
+        ).stdout.strip()
+        snap["branch"] = subprocess.run(
+            ["git", "-C", repo, "rev-parse", "--abbrev-ref", "HEAD"],
+            capture_output=True, text=True, check=True,
+        ).stdout.strip()
+        snap["remotes"] = subprocess.run(
+            ["git", "-C", repo, "remote", "-v"],
+            capture_output=True, text=True, check=True,
+        ).stdout
+    else:
+        snap["head"] = None
+        snap["branch"] = None
+        snap["remotes"] = ""
+    files = {}
+    for root, dirs, names in os.walk(repo):
+        if ".git" in dirs:
+            dirs.remove(".git")
+        for fn in names:
+            full = os.path.join(root, fn)
+            rel = os.path.relpath(full, repo)
+            with open(full, "rb") as fh:
+                files[rel] = fh.read()
+    snap["files"] = files
+    return snap
+
+
+def _assert_unchanged(repo, snap):
+    """Assert the repo's git state and working tree exactly match ``snap``."""
+    now = _snapshot(repo)
+    assert now["head"] == snap["head"], (
+        f"HEAD changed: {snap['head']!r} -> {now['head']!r}"
+    )
+    assert now["branch"] == snap["branch"], "current branch changed"
+    assert now["remotes"] == snap["remotes"], "remotes changed"
+    assert now["files"] == snap["files"], "working-tree files changed"
+
+
+class TestProfileSubmitIsolation(unittest.TestCase):
+    """Submission must run entirely inside a disposable temp clone and never
+    mutate the caller repository, fail closed on collision, and return
+    structured per-stage failures (issue #33)."""
+
+    def _chdir(self, path):
+        saved = os.getcwd()
+        os.chdir(path)
+        return saved
+
+    def _router(self, **kw):
+        return _SubmitRouter(**kw)
+
+    def _submit_under_router(self, router, name="sculpfun-s9"):
+        with unittest.mock.patch(
+            "cli_anything.meerk40t.utils.submit.shutil.which",
+            return_value="/usr/bin/gh",
+        ):
+            with unittest.mock.patch(
+                "cli_anything.meerk40t.utils.submit.subprocess.run",
+                router,
+            ):
+                return submit_mod.submit_profile(name, yes=True)
+
+    def test_isolation_success_leaves_caller_untouched(self):
+        caller = tempfile.mkdtemp(prefix="mk_caller_")
+        saved = self._chdir(caller)
+        try:
+            _init_caller_repo(caller)
+            snap = _snapshot(caller)
+            router = self._router()
+            res = self._submit_under_router(router)
+
+            self.assertIs(res["submitted"], True)
+            self.assertEqual(res["pr_url"], router.pr_url)
+            # The community file was written under the captured clone dir.
+            self.assertIsNotNone(router.clone_dir)
+            add_calls = [
+                el
+                for c in router.calls
+                if c["cmd"][:1] == ["git"] and "add" in c["cmd"]
+                for el in c["cmd"]
+                if isinstance(el, str) and el.startswith(router.clone_dir)
+            ]
+            self.assertTrue(add_calls, "expected a git add of the community file")
+            added = add_calls[0]
+            self.assertTrue(added.startswith(router.clone_dir))
+            self.assertFalse(added.startswith(caller))
+            # Nothing landed in the caller repo.
+            self.assertFalse(
+                os.path.exists(
+                    os.path.join(caller, "profiles", "community", "sculpfun-s9.json")
+                )
+            )
+            _assert_unchanged(caller, snap)
+        finally:
+            os.chdir(saved)
+            shutil.rmtree(caller, ignore_errors=True)
+
+    def test_isolation_failure_at_each_stage(self):
+        cases = [
+            ("fork", "fork"),
+            ("clone", "clone"),
+            ("identity_raise", "identity"),
+            ("checkout", "checkout"),
+            ("push", "push"),
+            ("pr-create", "pr-create"),
+        ]
+        for fail_stage, expected in cases:
+            with self.subTest(fail_stage=fail_stage):
+                caller = tempfile.mkdtemp(prefix="mk_caller_")
+                saved = self._chdir(caller)
+                try:
+                    _init_caller_repo(caller)
+                    snap = _snapshot(caller)
+                    router = self._router(fail_stage=fail_stage)
+                    res = self._submit_under_router(router)
+                    self.assertIs(res["ok"], False)
+                    self.assertEqual(res["stage"], expected)
+                    _assert_unchanged(caller, snap)
+                finally:
+                    os.chdir(saved)
+                    shutil.rmtree(caller, ignore_errors=True)
+
+    def test_identity_mismatch_fails_before_checkout(self):
+        caller = tempfile.mkdtemp(prefix="mk_caller_")
+        saved = self._chdir(caller)
+        try:
+            _init_caller_repo(caller)
+            snap = _snapshot(caller)
+            router = self._router(origin="https://github.com/Evil/repo.git")
+            res = self._submit_under_router(router)
+            self.assertEqual(res["stage"], "identity")
+            self.assertIs(res["ok"], False)
+            for c in router.calls:
+                self.assertNotIn("checkout", c["cmd"])
+                self.assertNotIn("add", c["cmd"])
+            _assert_unchanged(caller, snap)
+        finally:
+            os.chdir(saved)
+            shutil.rmtree(caller, ignore_errors=True)
+
+    def test_branch_collision_local_fails_closed(self):
+        caller = tempfile.mkdtemp(prefix="mk_caller_")
+        saved = self._chdir(caller)
+        try:
+            _init_caller_repo(caller)
+            snap = _snapshot(caller)
+            router = self._router(collision_local=True)
+            res = self._submit_under_router(router)
+            self.assertEqual(res["stage"], "checkout")
+            self.assertIs(res["ok"], False)
+            for c in router.calls:
+                self.assertNotIn("push", c["cmd"])
+            _assert_unchanged(caller, snap)
+        finally:
+            os.chdir(saved)
+            shutil.rmtree(caller, ignore_errors=True)
+
+    def test_branch_collision_remote_fails_closed(self):
+        caller = tempfile.mkdtemp(prefix="mk_caller_")
+        saved = self._chdir(caller)
+        try:
+            _init_caller_repo(caller)
+            snap = _snapshot(caller)
+            router = self._router(collision_remote=True)
+            res = self._submit_under_router(router)
+            self.assertEqual(res["stage"], "checkout")
+            self.assertIs(res["ok"], False)
+            _assert_unchanged(caller, snap)
+        finally:
+            os.chdir(saved)
+            shutil.rmtree(caller, ignore_errors=True)
+
+    def test_fork_already_exists_tolerated(self):
+        caller = tempfile.mkdtemp(prefix="mk_caller_")
+        saved = self._chdir(caller)
+        try:
+            _init_caller_repo(caller)
+            snap = _snapshot(caller)
+            router = self._router(fail_stage="fork", fork_error_kind="already")
+            res = self._submit_under_router(router)
+            self.assertNotEqual(res.get("stage"), "fork")
+            self.assertIs(res["submitted"], True)
+            _assert_unchanged(caller, snap)
+        finally:
+            os.chdir(saved)
+            shutil.rmtree(caller, ignore_errors=True)
+
+    def test_fork_other_error_fails(self):
+        caller = tempfile.mkdtemp(prefix="mk_caller_")
+        saved = self._chdir(caller)
+        try:
+            _init_caller_repo(caller)
+            snap = _snapshot(caller)
+            router = self._router(fail_stage="fork", fork_error_kind="boom")
+            res = self._submit_under_router(router)
+            self.assertEqual(res["stage"], "fork")
+            self.assertIs(res["ok"], False)
+            _assert_unchanged(caller, snap)
+        finally:
+            os.chdir(saved)
+            shutil.rmtree(caller, ignore_errors=True)
+
+    def test_structured_failure_shape(self):
+        caller = tempfile.mkdtemp(prefix="mk_caller_")
+        saved = self._chdir(caller)
+        try:
+            _init_caller_repo(caller)
+            snap = _snapshot(caller)
+            router = self._router(fail_stage="push")
+            res = self._submit_under_router(router)
+            self.assertIs(res["ok"], False)
+            self.assertIsInstance(res["stage"], str)
+            self.assertIsInstance(res["error"], str)
+            self.assertIn("submitted", res)  # public shape preserved
+            _assert_unchanged(caller, snap)
+        finally:
+            os.chdir(saved)
+            shutil.rmtree(caller, ignore_errors=True)
+
+    def test_write_failure_returns_structured_failure(self):
+        caller = tempfile.mkdtemp(prefix="mk_caller_")
+        saved = self._chdir(caller)
+        try:
+            _init_caller_repo(caller)
+            snap = _snapshot(caller)
+            router = self._router()
+            with unittest.mock.patch(
+                "cli_anything.meerk40t.utils.submit.shutil.which",
+                return_value="/usr/bin/gh",
+            ), unittest.mock.patch(
+                "cli_anything.meerk40t.utils.submit.subprocess.run",
+                router,
+            ), unittest.mock.patch.object(submit_mod, "Path") as MP:
+                inst = MP.return_value.__truediv__.return_value
+                inst.parent.mkdir.return_value = None
+                inst.write_text.side_effect = OSError("disk full")
+                res = submit_mod.submit_profile("sculpfun-s9", yes=True)
+            self.assertIs(res["ok"], False)
+            self.assertEqual(res["stage"], "write")
+            self.assertIn("disk full", res["error"])
+            _assert_unchanged(caller, snap)
+        finally:
+            os.chdir(saved)
+            shutil.rmtree(caller, ignore_errors=True)
 
 
 class TestProfileSubmitCli(unittest.TestCase):
