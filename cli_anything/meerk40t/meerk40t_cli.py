@@ -758,7 +758,7 @@ def operations_list(ctx: click.Context):
 @click.pass_context
 @mutating
 def operations_add(ctx: click.Context, op_type: str):
-    """Add an operation (cut, engrave, raster, image, dots)."""
+    """Add an operation (cut, engrave, raster, dots)."""
     _emit(ctx, operations_mod.add_operation(ctx.obj["backend"], op_type))
 
 
