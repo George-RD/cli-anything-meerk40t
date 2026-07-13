@@ -578,8 +578,10 @@ class TestCliDevice(unittest.TestCase):
         self.assertFalse(data["connected"])
 
     def test_cli_dummy_connect_error_wiring(self):
+        # A failed connect is a structured failure: it must exit nonzero while
+        # still emitting a payload that explains why (connected=False + error).
         result, out = self._run_json(["device", "connect"])
-        self.assertEqual(result.exit_code, 0, result.output)
+        self.assertEqual(result.exit_code, 1, result.output)
         data = json.loads(out)
         self.assertFalse(data["connected"])
         self.assertIn("error", data)
@@ -1819,6 +1821,217 @@ class TestStageFileScene(unittest.TestCase):
         self.assertEqual(len(list(el.ops())), before_ops)
         self.assertEqual(len(list(el.elems())), before_elems)
 
+
+class TestSaveVerification(BackendTestCase):
+    """RED regressions for hardened save_svg / load_file (issue #26)."""
+
+    def test_save_svg_rejects_unsupported_version_preserves_bytes(self):
+        from cli_anything.meerk40t.utils.meerk40t_backend import SaveVerificationError
+        path = self.temp_path("out.svg")
+        self.backend.run("circle 1in 1in 1in")
+        self.assertTrue(self.backend.save_svg(path))
+        before = open(path, "rb").read()
+        # An unsupported version must fail before any write and leave bytes intact.
+        with self.assertRaises(SaveVerificationError):
+            self.backend.save_svg(path, version="bogus")
+        self.assertEqual(open(path, "rb").read(), before)
+
+    def test_save_svg_rejects_missing_output(self):
+        from cli_anything.meerk40t.utils.meerk40t_backend import SaveVerificationError
+        from unittest.mock import patch
+        path = self.temp_path("out.svg")
+        self.backend.run("circle 1in 1in 1in")
+        # Simulate the backend failing to produce any output for the target path.
+        with patch.object(self.backend, "run", lambda cmd: None):
+            with self.assertRaises(SaveVerificationError):
+                self.backend.save_svg(path)
+
+    def test_save_svg_write_failure_preserves_existing_bytes(self):
+        from cli_anything.meerk40t.utils.meerk40t_backend import SaveVerificationError
+        from unittest.mock import patch
+        path = self.temp_path("out.svg")
+        self.backend.run("circle 1in 1in 1in")
+        self.assertTrue(self.backend.save_svg(path))
+        before = open(path, "rb").read()
+        # Simulate the backend writing an EMPTY file where it should have saved.
+        def fake_run(cmd):
+            target = cmd.split(" ", 1)[1] if " " in cmd else cmd
+            open(target, "w").close()
+            return []
+        with patch.object(self.backend, "run", fake_run):
+            with self.assertRaises(SaveVerificationError):
+                self.backend.save_svg(path)
+        # A failed write must never corrupt or truncate the pre-existing file.
+        self.assertEqual(open(path, "rb").read(), before)
+
+    def test_load_file_rejects_failed_load(self):
+        from cli_anything.meerk40t.utils.meerk40t_backend import LoadError
+        from unittest.mock import patch
+        path = self.temp_path("roundtrip.svg")
+        self.backend.run("circle 1in 1in 1in")
+        self.assertTrue(self.backend.save_svg(path))
+
+        def fake_run(cmd):
+            self.backend._captured.append("Error: cannot parse file")
+            return self.backend._captured
+
+        with patch.object(self.backend, "run", fake_run):
+            with self.assertRaises(LoadError):
+                self.backend.load_file(path)
+
+    def test_save_svgz_default_roundtrips(self):
+        import gzip
+        path = self.temp_path("proj.svgz")
+        self.backend.run("circle 1in 1in 1in")
+        # A default .svgz save must select the compressed saver and produce a
+        # valid gzip artifact (regression: default omitted -v compressed).
+        self.assertTrue(self.backend.save_svg(path))
+        with gzip.open(path, "rb") as g:
+            self.assertIn(b"<svg", g.read(4096))
+
+    def test_load_file_allows_error_named_path(self):
+        # A path whose name contains "exception"/"error" must not be misread as
+        # a load failure from the echoed command line (regression).
+        path = self.temp_path("exception-error.svg")
+        self.backend.run("circle 1in 1in 1in")
+        self.assertTrue(self.backend.save_svg(path))
+        self.backend.run("elements clear all")
+        self.assertTrue(self.backend.load_file(path))
+        self.assertGreaterEqual(self.backend.elem_count(), 1)
+
+
+class TestCommandOutcomeBoundary(BackendTestCase):
+    """RED regressions for the single _complete_command boundary (issue #26)."""
+
+    def _dummy_ctx(self, project_path=None, session=None, dry_run=False):
+        import click
+        backend = self.backend
+
+        class DummyContext(click.Context):
+            def __init__(self):
+                self.obj = {
+                    "backend": backend,
+                    "session": session,
+                    "project_path": project_path,
+                    "dry_run": dry_run,
+                    "json": True,
+                }
+
+            def exit(self, code=0):
+                raise SystemExit(code)
+
+        return DummyContext()
+
+    def test_success_autosaves_exactly_once(self):
+        from cli_anything.meerk40t.meerk40t_cli import _complete_command
+        from unittest.mock import patch
+        path = self.temp_path("proj.svg")
+        self.backend.run("circle 1in 1in 1in")
+        self.assertTrue(self.backend.save_svg(path))
+        ctx = self._dummy_ctx(project_path=path)
+        with patch.object(self.backend, "save_svg", wraps=self.backend.save_svg) as spy:
+            with self.assertRaises(SystemExit) as cm:
+                _complete_command(ctx, {"ok": True, "saved": True}, mutating=True)
+            self.assertEqual(cm.exception.code, 0)
+            spy.assert_called_once()
+
+    def test_failure_does_not_autosave(self):
+        from cli_anything.meerk40t.meerk40t_cli import _complete_command
+        from unittest.mock import patch
+        path = self.temp_path("proj.svg")
+        ctx = self._dummy_ctx(project_path=path)
+        with patch.object(self.backend, "save_svg") as spy:
+            with self.assertRaises(SystemExit) as cm:
+                _complete_command(ctx, {"error": "boom"}, mutating=True)
+            self.assertEqual(cm.exception.code, 1)
+            spy.assert_not_called()
+
+    def test_persistence_failure_converts_to_failure(self):
+        from cli_anything.meerk40t.meerk40t_cli import _complete_command
+        from cli_anything.meerk40t.utils.meerk40t_backend import (
+            BackendError,
+            SaveVerificationError,
+        )
+        from unittest.mock import patch
+        path = self.temp_path("proj.svg")
+        ctx = self._dummy_ctx(project_path=path)
+        with patch.object(
+            self.backend, "save_svg", side_effect=SaveVerificationError("nope", path=path)
+        ):
+            with self.assertRaises(SystemExit) as cm:
+                _complete_command(ctx, {"ok": True}, mutating=True)
+            self.assertEqual(cm.exception.code, 1)
+        # The boundary must treat BackendError as a failure, not crash.
+        self.assertTrue(issubclass(SaveVerificationError, BackendError))
+
+    def test_repl_routes_through_boundary(self):
+        from cli_anything.meerk40t.meerk40t_cli import _dispatch_repl, _complete_command
+        from unittest.mock import patch
+        path = self.temp_path("repl.svg")
+        self.backend.run("circle 1in 1in 1in")
+        self.assertTrue(self.backend.save_svg(path))
+        ctx = self._dummy_ctx(project_path=path)
+        with patch(
+            "cli_anything.meerk40t.meerk40t_cli._complete_command"
+        ) as spy_complete:
+            _dispatch_repl(ctx, "elements translate 0 10mm 20mm", None, {})
+            spy_complete.assert_called()
+            _, kwargs = spy_complete.call_args
+            self.assertTrue(kwargs.get("mutating"))
+
+    def test_repl_mutation_persists(self):
+        from cli_anything.meerk40t.meerk40t_cli import _dispatch_repl
+        from unittest.mock import patch
+        path = self.temp_path("repl.svg")
+        self.backend.run("circle 1in 1in 1in")
+        self.assertTrue(self.backend.save_svg(path))
+        ctx = self._dummy_ctx(project_path=path)
+        with patch.object(self.backend, "save_svg", wraps=self.backend.save_svg) as spy:
+            _dispatch_repl(ctx, "elements translate 0 10mm 20mm", None, {})
+        spy.assert_called_once()
+
+    def test_empty_error_string_is_failure(self):
+        from cli_anything.meerk40t.meerk40t_cli import _complete_command
+        from unittest.mock import patch
+        path = self.temp_path("proj.svg")
+        ctx = self._dummy_ctx(project_path=path)
+        # An error payload with an empty message (e.g. RuntimeError()) is still a
+        # failure: nonzero exit and no autosave.
+        with patch.object(self.backend, "save_svg") as spy:
+            with self.assertRaises(SystemExit) as cm:
+                _complete_command(ctx, {"error": ""}, mutating=True)
+            self.assertEqual(cm.exception.code, 1)
+            spy.assert_not_called()
+
+    def test_none_error_is_success(self):
+        from cli_anything.meerk40t.meerk40t_cli import _complete_command
+        from unittest.mock import patch
+        path = self.temp_path("proj.svg")
+        self.backend.run("circle 1in 1in 1in")
+        self.assertTrue(self.backend.save_svg(path))
+        ctx = self._dummy_ctx(project_path=path)
+        # error=None is the device-acknowledgement success sentinel, not failure.
+        with patch.object(self.backend, "save_svg", wraps=self.backend.save_svg) as spy:
+            with self.assertRaises(SystemExit) as cm:
+                _complete_command(ctx, {"error": None, "ok": True}, mutating=True)
+            self.assertEqual(cm.exception.code, 0)
+            spy.assert_called_once()
+
+    def test_repl_project_open_persists_session(self):
+        from cli_anything.meerk40t.meerk40t_cli import _dispatch_repl
+        from cli_anything.meerk40t.core import session as session_mod
+        from unittest.mock import patch
+        src = self.temp_path("src.svg")
+        self.backend.run("circle 1in 1in 1in")
+        self.assertTrue(self.backend.save_svg(src))
+        sess = session_mod.Session(self.temp_path("sess.json"))
+        ctx = self._dummy_ctx(session=sess)
+        # Opening a project changes the session's SVG association, so the REPL
+        # must treat it as mutating and persist it (regression: was read-only).
+        with patch.object(self.backend, "save_svg", wraps=self.backend.save_svg) as spy:
+            _dispatch_repl(ctx, f"project open {src}", None, {})
+        self.assertEqual(sess.svg_path, src)
+        spy.assert_called_once()
 
 if __name__ == "__main__":
     unittest.main()

@@ -11,6 +11,51 @@ from __future__ import annotations
 import os
 import re
 import threading
+import secrets
+import xml.etree.ElementTree as ET
+
+
+class BackendError(Exception):
+    """Base class for backend persistence failures.
+
+    ``category`` is "infrastructure" for failures outside the user's control
+    (disk, permissions) and "user" for failures caused by bad input/state.
+    """
+
+    category = "infrastructure"
+
+    def __init__(self, message=None, *, path=None, reason=None):
+        self.path = path
+        self.reason = reason
+        super().__init__(message or reason or "backend error")
+
+
+class SaveVerificationError(BackendError):
+    """The saved artifact failed post-write verification."""
+
+    category = "user"
+
+
+class LoadError(BackendError):
+    """Loading a project file failed."""
+
+    category = "user"
+
+
+def _looks_like_error(line: str) -> bool:
+    """True only for lines that begin with a MeerK40t error diagnostic.
+
+    Matches on the leading token so an echoed ``load /path/exception.svg`` (the
+    command echo captured by ``run``) or a path containing ``error`` is never
+    misclassified as a load failure.
+    """
+    s = line.strip().lower()
+    if not s:
+        return False
+    return s.startswith(
+        ("error", "traceback", "exception", "cannot ", "unable to", "failed to")
+    )
+
 from typing import Any, Optional
 
 
@@ -272,23 +317,76 @@ class Meerk40tBackend:
     # ── file I/O (real backend) ─────────────────────────────────────────
 
     def save_svg(self, path: str, version: str = "default") -> bool:
-        """Save the current elements tree to SVG via the real SVGWriter."""
+        """Save the current elements tree to SVG via the real SVGWriter.
+
+        Writes to a same-directory temporary file, verifies the artifact exists,
+        is non-empty and parses as a well-formed SVG (or valid svgz), then
+        atomically replaces the target. A verification failure raises
+        SaveVerificationError and never touches an existing target file.
+        """
         if not path.lower().endswith((".svg", ".svgz")):
             raise ValueError("save_svg requires a .svg or .svgz path")
+        if version not in ("default", "plain", "compressed"):
+            raise SaveVerificationError(f"unsupported version: {version!r}")
         abspath = os.path.realpath(path)
-        cmd = f"save {abspath}"
-        if version and version != "default":
-            cmd += f" -v {version}"
-        before = len(self._captured)
-        self.run(cmd)
-        return os.path.exists(abspath) and os.path.getsize(abspath) > 0
+        compressed = version == "compressed" or abspath.lower().endswith(".svgz")
+        # MeerK40t registers the SVGZ saver under the "compressed" version and
+        # dispatches on version, so a default .svgz save must request it
+        # explicitly or no saver matches and nothing is written.
+        effective = "compressed" if (compressed and version == "default") else version
+        suffix = ".svgz" if compressed else ".svg"
+        token = secrets.token_hex(6)
+        tmp = f"{abspath}.tmp-{token}{suffix}"
+        cmd = f"save {tmp}"
+        if effective != "default":
+            cmd += f" -v {effective}"
+        try:
+            self.run(cmd)
+            if not os.path.exists(tmp) or os.path.getsize(tmp) == 0:
+                raise SaveVerificationError("backend produced no output", path=abspath)
+            if compressed:
+                try:
+                    import gzip
+                    with gzip.open(tmp, "rb") as g:
+                        g.read(1)
+                except Exception as exc:
+                    raise SaveVerificationError(f"invalid svgz: {exc}", path=abspath)
+            else:
+                try:
+                    tree = ET.parse(tmp)
+                    root_tag = tree.getroot().tag
+                    local = root_tag.rsplit("}", 1)[-1].lower()
+                    if local != "svg":
+                        raise SaveVerificationError(
+                            f"output root is {root_tag!r}, not SVG", path=abspath
+                        )
+                except SaveVerificationError:
+                    raise
+                except Exception as exc:
+                    raise SaveVerificationError(f"output is not well-formed SVG: {exc}", path=abspath)
+            os.replace(tmp, abspath)
+        except BaseException:
+            if os.path.exists(tmp):
+                try:
+                    os.remove(tmp)
+                except OSError:
+                    pass
+            raise
+        return True
 
     def load_file(self, path: str) -> bool:
-        """Load an SVG/DXF file into the elements tree via the real loader."""
+        """Load an SVG/DXF file into the elements tree via the real loader.
+
+        Raises FileNotFoundError when the path is missing and LoadError when the
+        backend reports a load failure (inspected from captured console output).
+        """
         abspath = os.path.realpath(path)
         if not os.path.exists(abspath):
             raise FileNotFoundError(abspath)
         self.run(f"load {abspath}")
+        errors = [line for line in self.captured if _looks_like_error(line)]
+        if errors:
+            raise LoadError("; ".join(errors), path=abspath)
         return True
 
     # ── introspection ──────────────────────────────────────────────────
