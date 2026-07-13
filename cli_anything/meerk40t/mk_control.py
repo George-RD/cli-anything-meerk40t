@@ -19,10 +19,9 @@ import json
 import os
 import base64
 import hashlib
+from cli_anything.meerk40t.utils import serial_probe
 
 FRAME_PREFIX = "#CLIA1# "
-
-_VALID_GRBL_STATES = {"Idle", "Alarm", "Run"}
 
 
 def register(kernel):
@@ -125,19 +124,21 @@ def _build_status(kernel):
         raw_port = getattr(device, "serial_port", None) or getattr(device, "port", None)
         if raw_port is not None and str(raw_port).lower() != "unconfigured":
             serial_port = str(raw_port)
-
-        # Prefer the device-level grbl state; fall back to the driver.
+        # Preserve the full GRBL state vocabulary (incl. Hold/Door/Check/Home)
+        # instead of collapsing unknown states to "unknown".
         state = getattr(device, "_state", None)
-        if state in _VALID_GRBL_STATES:
-            grbl_state = state
+        parsed_base, parsed_sub = serial_probe.parse_grbl_state(state or "")
+        if parsed_base is not None:
+            grbl_state = parsed_base if parsed_sub is None else f"{parsed_base}:{parsed_sub}"
         else:
             driver = getattr(device, "driver", None)
             if driver is not None:
                 drv_state = getattr(driver, "grbl_state", None) or getattr(
                     driver, "_state", None
                 )
-                if drv_state in _VALID_GRBL_STATES:
-                    grbl_state = drv_state
+                parsed_base, parsed_sub = serial_probe.parse_grbl_state(drv_state or "")
+                if parsed_base is not None:
+                    grbl_state = parsed_base if parsed_sub is None else f"{parsed_base}:{parsed_sub}"
 
     return {
         "protocol": 1,
