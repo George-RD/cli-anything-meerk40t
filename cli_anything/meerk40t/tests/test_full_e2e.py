@@ -847,7 +847,7 @@ class TestPR24Findings(TestAttachRoundTrip):
         with open(self.manifest, "r", encoding="utf-8") as fh:
             manifest = json.load(fh)
         manifest["files"]["job_svg"]["path"] = spacer_svg
-        spacer_manifest = os.path.join(self.temp_dir, "spacer_manifest.json")
+        spacer_manifest = os.path.join(os.path.dirname(self.manifest), "spacer_manifest.json")
         with open(spacer_manifest, "w", encoding="utf-8") as fh:
             json.dump(manifest, fh)
 

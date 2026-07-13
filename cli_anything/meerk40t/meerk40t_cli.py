@@ -29,6 +29,8 @@ from cli_anything.meerk40t.utils import submit as submit_mod
 from cli_anything.meerk40t.utils import attach_client as attach_client_mod
 from cli_anything.meerk40t.utils import job_prep as job_prep_mod
 from cli_anything.meerk40t.utils import materials as materials_mod
+from cli_anything.meerk40t.utils import manifest as manifest_mod
+from cli_anything.meerk40t.utils.gcode_modal import verify_gcode
 from cli_anything.meerk40t.utils.repl_skin import ReplSkin
 # Driver choices for --device. Extracted to a module-level var so the
 # skill_generator regex (which chokes on nested parens in decorators) does
@@ -1520,11 +1522,16 @@ def _run_preflight(
     """Re-verify a job manifest. One code path for `job preflight` and `attach stage`.
 
     Returns ``(result, exit_code)``. Hard failures (hash mismatch, missing file,
-    changed material settings, failed verification) are exit 1 for ``job
-    preflight`` and exit 2 for ``attach stage`` (every staging refusal is an
-    acknowledgeable gate). Estimated roles without ``--allow-estimated`` always
-    take precedence as the exit-2 acknowledgeable gate. Ladder manifests skip
-    the settings-fingerprint re-resolution (their fingerprint is null).
+    changed material settings, failed verification, invalid manifest) are exit 1
+    for ``job preflight`` and exit 2 for ``attach stage`` (every staging refusal
+    is an acknowledgeable gate). Estimated roles without ``--allow-estimated``
+    always take precedence as the exit-2 acknowledgeable gate. Ladder manifests
+    skip the settings-fingerprint re-resolution (their fingerprint is null).
+
+    File paths in the manifest are RELATIVE TO THE MANIFEST DIRECTORY, so a
+    copied bundle verifies from any cwd. The stored verification block is
+    treated as HISTORY ONLY: every safety boolean is recomputed from the
+    recorded g-code bytes, so a stale or tampered positive verdict is rejected.
     """
     mpath = Path(manifest_path).resolve()
     if not mpath.exists():
@@ -1533,60 +1540,55 @@ def _run_preflight(
             2 if stage_mode else 1,
         )
     try:
-        manifest = json.loads(mpath.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
+        manifest = manifest_mod.strict_load_json(mpath.read_text(encoding="utf-8"))
+        manifest_mod.validate_manifest(manifest)
+    except manifest_mod.ManifestValidationError as exc:
+        return (
+            {
+                "ok": False,
+                "failure": True,
+                "failures": ["manifest validation failed: " + "; ".join(exc.errors)],
+                "messages": ["manifest validation failed: " + "; ".join(exc.errors)],
+            },
+            2 if stage_mode else 1,
+        )
+    except OSError as exc:
         return (
             {"ok": False, "failures": [f"manifest unreadable: {exc}"]},
             2 if stage_mode else 1,
         )
-    if not isinstance(manifest, dict):
-        return (
-            {
-                "ok": False,
-                "failures": [
-                    f"manifest root must be a JSON object, got {type(manifest).__name__}"
-                ],
-            },
-            2 if stage_mode else 1,
-        )
-    schema = manifest.get("schema")
-    if schema != "clia-job-manifest-v1":
-        return (
-            {
-                "ok": False,
-                "failures": [
-                    f"unknown or missing manifest schema: {schema!r} "
-                    "(expected 'clia-job-manifest-v1')"
-                ],
-            },
-            2 if stage_mode else 1,
-        )
 
-    is_ladder = manifest.get("kind") == "ladder"
+    is_ladder = manifest.get("kind", "job") == "ladder"
+    machine = manifest.get("machine")
+    material = manifest.get("material")
     failures: list[str] = []
     warnings: list[str] = []
 
-    # 1. Recompute sha256 for every file recorded at prepare time.
+    # 1. Recompute sha256 for every file recorded at prepare time. Paths are
+    #    RELATIVE TO THE MANIFEST DIRECTORY, so resolve them against mpath.parent
+    #    (a copied bundle then verifies from any cwd).
+    mroot = mpath.parent
     files = manifest.get("files", {})
     for fname in ("input_svg", "job_svg", "gcode"):
         entry = files.get(fname) or {}
-        path = entry.get("path")
+        rel = entry.get("path")
         recorded = entry.get("sha256")
-        if not path:
+        if not rel:
             failures.append(f"manifest missing files.{fname}")
             continue
-        actual = _sha256_file(path)
+        apath = (mroot / rel).resolve()
+        actual = _sha256_file(str(apath))
         if actual is None:
-            failures.append(f"{fname} missing: {path} - regenerate with job prepare")
+            failures.append(f"{fname} missing: {apath} - regenerate with job prepare")
         elif actual != recorded:
-            failures.append(f"{fname} hash mismatch: {path} - regenerate with job prepare")
+            failures.append(
+                f"{fname} hash mismatch: {apath} - regenerate with job prepare"
+            )
 
     # 2. Re-resolve material + machine and recompute the settings fingerprint.
     #    Ladder manifests have no settings_fingerprint to check.
     if not is_ladder:
         fingerprint = manifest.get("settings_fingerprint")
-        machine = manifest.get("machine")
-        material = manifest.get("material")
         try:
             mat = materials_mod.load_material(material) if material else None
             if mat is None:
@@ -1604,12 +1606,52 @@ def _run_preflight(
         except (ValueError, materials_mod.MaterialError) as exc:
             failures.append(f"{exc} - re-run job prepare")
 
-    # 3. Re-check the recorded verification verdict.
+    # 3. RECOMPUTE the g-code safety verdict from the recorded bytes. The
+    #    stored verification block is HISTORY only: a manifest that claims
+    #    all_passed=true but whose bytes fail is rejected (defeats a stale or
+    #    tampered positive verdict). valid_burn_s is rebuilt from the recorded
+    #    operations/powers (the manifest is attacker-editable, but a forged
+    #    operations list only LOOSENS the check; it cannot make unsafe S values
+    #    pass, because the recompute also enforces feed/endpoint/bounds facts
+    #    that no attacker field controls).
     verification = manifest.get("verification", {})
-    if not verification.get("all_passed"):
-        failures.append(
-            "recorded verification did not pass - regenerate with job prepare"
-        )
+    kind = manifest.get("kind", "job")
+    gcode_entry = files.get("gcode") or {}
+    gcode_rel = gcode_entry.get("path")
+    if gcode_rel:
+        try:
+            gpath = (mroot / gcode_rel).resolve()
+            gcode_bytes = Path(gpath).read_bytes()
+            bed_width, bed_height = job_prep_mod._load_machine_bed(machine)
+            recomputed = verify_gcode(
+                gcode_bytes.decode("utf-8", "replace"),
+                bed_width=bed_width,
+                bed_height=bed_height,
+                valid_burn_s={
+                    op["power"]
+                    for op in manifest.get("operations", [])
+                    if isinstance(op, dict) and op.get("power")
+                },
+                expected_passes=(
+                    len(manifest["powers"]) if kind == "ladder" else None
+                ),
+                is_ladder=(kind == "ladder"),
+            )
+            # no_unassigned is derived from the stored unassigned list (element
+            # assignment cannot be re-run here); the security-critical safety
+            # booleans above are recomputed fresh from the bytes.
+            recomputed_no_unassigned = (
+                len(verification.get("unassigned_elements", [])) == 0
+            )
+            if not (recomputed["all_passed"] and recomputed_no_unassigned):
+                msg = "recomputed verification failed: " + "; ".join(
+                    recomputed["notes"]
+                )
+                if not recomputed_no_unassigned:
+                    msg += "; unassigned elements present"
+                failures.append(msg)
+        except Exception as exc:  # pragma: no cover - defensive
+            failures.append(f"could not recompute verification: {exc}")
 
     # 4. Estimated-role gate - provenance comes from the TRUSTED material store,
     #    never from the manifest's recorded estimated_roles. We take the set of
@@ -1677,7 +1719,15 @@ def _run_preflight(
 
     hard_exit = 2 if stage_mode else 1
     if failures:
-        return ({"ok": False, "failures": failures}, hard_exit)
+        return (
+            {
+                "ok": False,
+                "failure": True,
+                "failures": failures,
+                "messages": list(failures),
+            },
+            hard_exit,
+        )
 
     checklist = list(OPERATOR_CHECKLIST)
     if is_ladder:
@@ -2081,13 +2131,22 @@ def attach_stage(ctx, job_svg, manifest, allow_estimated):
     # The staged file must be the exact file whose hashes were verified: one
     # object carries the design, the verified hashes, and the material identity.
     recorded_job_svg = manifest_data.get("files", {}).get("job_svg", {}).get("path")
-    if recorded_job_svg != job_svg_abs:
+    # Manifest paths are RELATIVE TO THE MANIFEST DIRECTORY; resolve the
+    # recorded path there before comparing to the provided absolute path
+    # (also handles an absolute recorded path unchanged).
+    recorded_resolved = (
+        str((mpath.parent / recorded_job_svg).resolve())
+        if recorded_job_svg
+        else None
+    )
+    if recorded_resolved != job_svg_abs:
         _emit(
             ctx,
             {
                 "ok": False,
                 "failures": [
-                    f"job SVG {job_svg_abs!r} does not match manifest files.job_svg.path {recorded_job_svg!r}"
+                    f"job SVG {job_svg_abs!r} does not match manifest "
+                    f"files.job_svg.path {recorded_job_svg!r}"
                 ],
             },
         )
