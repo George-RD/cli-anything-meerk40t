@@ -21,26 +21,38 @@ jobs:
       contents: write
       pull-requests: write
       issues: write
+    # GH_TOKEN is required so every gh call (comment, issue view) is
+    # authenticated against the workflow's scoped token.
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
 
       - name: Validate community profile
         id: validate
         env:
           ISSUE_BODY: ${{ github.event.issue.body }}
           ISSUE_NUMBER: ${{ github.event.issue.number }}
+          # Make the checked-out package importable so we can reuse the
+          # shared validator instead of duplicating the schema here.
+          PYTHONPATH: ${{ github.workspace }}
         run: |
           python3 - <<'PY'
-          import json, os, re, sys
+          import hashlib, json, os, re, subprocess, sys
+
           body = os.environ["ISSUE_BODY"]
           num = os.environ["ISSUE_NUMBER"]
 
           def comment(msg):
               with open("/tmp/comment.md", "w", encoding="utf-8") as cf:
                   cf.write(msg)
-              os.system(f"gh issue comment {num} --body-file /tmp/comment.md")
               with open(os.environ["GITHUB_OUTPUT"], "a") as f:
                   f.write("valid=false\n")
+              # A failed comment must fail the step; do NOT swallow it.
+              subprocess.run(
+                  ["gh", "issue", "comment", num, "--body-file", "/tmp/comment.md"],
+                  check=True,
+              )
 
           m = re.search(r"```(?:json)?\s*(.*?)```", body, re.DOTALL)
           if not m:
@@ -57,55 +69,72 @@ jobs:
               comment(f"The JSON in the code block is not valid: {e}")
               sys.exit(0)
 
-          REQUIRED = {
-              "name", "device", "baud", "bedwidth", "bedheight",
-              "has_endstops", "notes", "provenance",
-          }
-          type_of = {
-              "name": str, "device": str, "baud": int, "bedwidth": str,
-              "bedheight": str, "has_endstops": bool, "notes": str,
-              "provenance": dict,
-          }
-          errs = [k for k in REQUIRED if k not in prof]
-          for k, exp in type_of.items():
-              if k not in prof or prof[k] is None:
-                  continue
-              v = prof[k]
-              if exp is int and isinstance(v, bool):
-                  errs.append(f"{k} must be int (got bool)")
-              elif exp is bool and isinstance(v, int) and not isinstance(v, bool):
-                  errs.append(f"{k} must be bool (got int)")
-              elif not isinstance(v, exp):
-                  errs.append(f"{k} must be {exp.__name__}")
+          # Delegate all schema/name/provenance checks to the package
+          # validator; no inline REQUIRED/_TYPE_OF duplication.
+          sys.path.insert(0, os.environ["PYTHONPATH"])
+          from cli_anything.meerk40t.utils.submit import validate_submission
 
-          name = prof.get("name")
-          if not isinstance(name, str) or not re.match(
-              r"^[A-Za-z0-9][A-Za-z0-9._-]*$", name or ""
-          ):
-              errs.append("name must be a safe identifier")
-
-          prov = prof.get("provenance")
-          if isinstance(prov, dict) and not prov:
-              errs.append("provenance must not be empty")
-
+          errs = validate_submission(prof)
           if errs:
               comment("Profile validation failed:\n- " + "\n- ".join(errs))
               sys.exit(0)
 
+          name = prof["name"]
           os.makedirs("profiles/community", exist_ok=True)
           path = f"profiles/community/{name}.json"
           with open(path, "w", encoding="utf-8") as f:
               json.dump(prof, f, indent=2)
               f.write("\n")
+          body_hash = hashlib.sha256(body.encode("utf-8")).hexdigest()
           with open(os.environ["GITHUB_OUTPUT"], "a") as f:
               f.write("valid=true\n")
               f.write(f"name={name}\n")
+              f.write(f"body_hash={body_hash}\n")
           print(f"Validated profile {name}")
+          PY
+
+      # Before-push guard: create-pull-request owns the branch creation and
+      # push, so this checkpoint is the last place we can abort cleanly if the
+      # live issue changed (closed, relabelled, or body edited) after we
+      # validated and wrote the file.
+      - name: Re-verify live issue unchanged
+        if: steps.validate.outputs.valid == 'true'
+        env:
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+          VALIDATED_BODY_HASH: ${{ steps.validate.outputs.body_hash }}
+        run: |
+          python3 - <<'PY'
+          import hashlib, json, os, subprocess, sys
+
+          num = os.environ["ISSUE_NUMBER"]
+          wanted = os.environ["VALIDATED_BODY_HASH"]
+
+          out = subprocess.run(
+              ["gh", "issue", "view", num, "--json", "body,labels,state"],
+              check=True, capture_output=True, text=True,
+          ).stdout
+          live = json.loads(out)
+
+          if live.get("state") != "open":
+              print("Issue is no longer open; aborting before push.")
+              sys.exit(1)
+
+          labels = {lbl.get("name") for lbl in live.get("labels", [])}
+          if "community-profile" not in labels:
+              print("community-profile label removed; aborting before push.")
+              sys.exit(1)
+
+          h = hashlib.sha256(live.get("body", "").encode("utf-8")).hexdigest()
+          if h != wanted:
+              print("Issue body drifted since validation; aborting before push.")
+              sys.exit(1)
+
+          print("Live issue matches validated snapshot.")
           PY
 
       - name: Open pull request
         if: steps.validate.outputs.valid == 'true'
-        uses: peter-evans/create-pull-request@v7
+        uses: peter-evans/create-pull-request@22a9089034f40e5a961c8808d113e2c98fb63676  # v7
         with:
           commit-message: "Add community profile ${{ steps.validate.outputs.name }}"
           add-paths: profiles/community/${{ steps.validate.outputs.name }}.json
