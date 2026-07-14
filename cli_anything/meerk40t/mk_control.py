@@ -227,6 +227,56 @@ def _remove_nodes(nodes):
     return failed
 
 
+def _snapshot_roots(elements):
+    """Capture the current scene roots (top-level ops + elems) with their branch
+    and child index, BEFORE any destructive load.
+
+    Used to restore the exact pre-existing scene on refusal/failure regardless
+    of the loader's semantics (additive vs replacing).
+    """
+    roots = []
+    for n in _all_nodes(elements):
+        parent = n.parent
+        idx = None
+        if parent is not None:
+            try:
+                idx = parent.children.index(n)
+            except (ValueError, AttributeError):
+                idx = None
+        roots.append((n, parent, idx))
+    return roots
+
+
+def _restore_pre(roots, elements):
+    """Re-attach any pre-existing scene root the loader displaced.
+
+    The MeerK40t SVG loader is ADDITIVE for user elements: on the dev build it
+    merely appends the staged nodes, and on the clean 0.9.9100 package it
+    appends the staged elements but REMOVES the boot-default ops during load().
+    The net "replace" of the prior scene is driven by `_commit_replacement`
+    detaching all pre-existing roots on a successful commit. This helper only
+    restores the boot-default ops the loader displaced, re-inserting them at
+    their original branch index. It is idempotent: a root still attached
+    (`_parent is not None`) or still live is skipped, so a still-attached node
+    is never re-added (which would raise MeerK40t's "Cannot reparent node on
+    add." ValueError). Returns the list of roots whose re-attach raised so
+    callers can surface a rollback-incomplete result rather than silently
+    losing part of the original scene.
+    """
+    live = {id(n) for n in _all_nodes(elements)}
+    failed = []
+    for n, parent, idx in roots:
+        # Idempotent: skip any root still attached (`_parent is not None`) or
+        # already live. A still-attached node (e.g. a grouped child captured as
+        # an independent root) must not be re-added, or MeerK40t raises
+        # "Cannot reparent node on add." and falsely flags the rollback incomplete.
+        if parent is None or id(n) in live or getattr(n, "_parent", None) is not None:
+            continue
+        try:
+            parent.add_node(n, pos=idx)
+        except Exception:
+            failed.append(n)
+    return failed
 def _commit_replacement(elements, added_ids):
     """Detach every pre-existing node, reversibly, leaving only the staged job.
 
@@ -473,42 +523,55 @@ def _stage_file_impl(kernel, svg_bytes, manifest_bytes, allow_estimated=False, g
     elements = getattr(kernel, "elements", None)
     if elements is None:
         raise RuntimeError("elements service is not available")
-    # Transactional guarantee (M3): the MeerK40t SVG loader is treated as
-    # ADDITIVE - it appends new nodes and does not mutate pre-existing ones. We
-    # track exactly the nodes this load added (added_ids). Any failure BEFORE
-    # commit (loader exception, loader-returned-False, hash/inventory/bounds/
-    # machine-binding/modal-safety refusal) removes only the added nodes, so the
-    # pre-existing scene is left untouched. A commit failure (an old node raises
-    # on detach) re-attaches the already-detached old nodes in the SAME forward
-    # order they were detached, restoring the original sibling ordering. A
-    # SUCCESSFUL commit intentionally removes the old scene: the staged job
-    # replaces it. Pre-existing nodes are therefore never mutated in place; only
-    # removed wholesale on commit or (in the failure paths) left whole.
+    # Transactional guarantee (M3), loader-agnostic: the MeerK40t SVG loader's
+    # semantics differ across releases - some versions APPEND staged nodes to
+    # the existing scene (dev install), others are additive for elements but the
+    # clean 0.9.9100 loader removes the boot-default ops during load() (the
+    # staged elements are appended). The net replace of the prior scene is
+    # performed by `_commit_replacement` detaching pre-existing roots on commit.
+    # To make the rollback deterministic we snapshot the pre-existing scene ROOTS
+    # (pre_roots) BEFORE load. Any failure BEFORE commit (loader exception,
+    # loader-returned-False, hash/inventory/bounds/machine-binding/modal-safety
+    # refusal) removes only the added nodes, then re-attaches any pre-existing
+    # root the loader displaced, leaving the original scene byte-for-byte
+    # intact. A commit failure re-attaches the same displaced roots. A SUCCESSFUL
+    # commit intentionally discards pre_roots: the staged job replaces the scene.
+    # Pre-existing roots are therefore never mutated in place; only removed
+    # wholesale on commit or re-attached on refusal/rollback.
 
     # Write the received bytes to a receiver-owned temp file, then load via the
     # typed loader (NEVER kernel.console string interpolation of a path).
     fd, temp_path = tempfile.mkstemp(suffix=".svg", prefix="mk_stage_")
     with os.fdopen(fd, "wb") as fh:
         fh.write(svg_bytes)
+    pre_roots = _snapshot_roots(elements)
+    pre_ids = {id(n) for n, _, _ in pre_roots}
     try:
-        pre_ids = {id(n) for n in _all_nodes(elements)}
         try:
             loaded = elements.load(temp_path)
         except Exception as exc:
-            # Loader raised mid-load: roll back anything it already appended,
-            # then surface the failure so the scene stays exactly as it was.
+            # Loader raised mid-load: roll back anything it appended, then
+            # re-attach any pre-existing root it displaced, so the scene is
+            # left structurally identical to before the load.
             added = [n for n in _all_nodes(elements) if id(n) not in pre_ids]
-            _remove_nodes(added)
+            rm_failed = _remove_nodes(added)
+            res_failed = _restore_pre(pre_roots, elements)
+            if rm_failed or res_failed:
+                raise RuntimeError(
+                    "staged SVG loader raised (%s); rollback incomplete for %d node(s)"
+                    % (exc, len(rm_failed) + len(res_failed))
+                ) from exc
             raise
         added_ids = {id(n) for n in _all_nodes(elements)} - pre_ids
         added_ops = [o for o in elements.ops() if id(o) in added_ids]
         added_elems = [e for e in elements.elems() if id(e) in added_ids]
 
         if not loaded:
-            # Loader returned false without raising: nothing was appended, but
-            # be defensive and clear any partial additions.
+            # Loader returned false without raising: clear any partial
+            # additions and re-attach any pre-existing root it displaced.
             failed = _remove_nodes(added_ops + added_elems)
-            if failed:
+            restore_failed = _restore_pre(pre_roots, elements)
+            if failed or restore_failed:
                 return {"error": "staged SVG failed to load and rollback was incomplete"}
             return {"error": "receiver failed to load staged SVG (loader returned false)"}
 
@@ -516,30 +579,42 @@ def _stage_file_impl(kernel, svg_bytes, manifest_bytes, allow_estimated=False, g
         inv_err = _check_inventory(added_ops, added_elems, manifest)
         if inv_err is not None:
             failed = _remove_nodes(added_ops + added_elems)
+            restore_failed = _restore_pre(pre_roots, elements)
             msg = inv_err
-            if failed:
-                msg += "; rollback incomplete for %d node(s)" % len(failed)
+            if failed or restore_failed:
+                msg += "; rollback incomplete for %d node(s)" % (len(failed) + len(restore_failed))
             return {"error": msg}
 
         # 4. Geometry postcondition: staged bounds must fit the live bed.
         bounds_err = _check_bounds(kernel, added_elems)
         if bounds_err is not None:
             failed = _remove_nodes(added_ops + added_elems)
+            restore_failed = _restore_pre(pre_roots, elements)
             msg = bounds_err
-            if failed:
-                msg += "; rollback incomplete for %d node(s)" % len(failed)
+            if failed or restore_failed:
+                msg += "; rollback incomplete for %d node(s)" % (len(failed) + len(restore_failed))
             return {"error": msg}
-
-        # 5. Commit: detach every node that pre-dated this load (previous job,
-        #    auto-default ops, etc.), leaving exactly the staged job. Detachment
-        #    is reversible: if any old node fails to detach, the already-detached
+        # 5. Commit: detach every scene root that pre-dated this load (previous
+        #    job, auto-default ops, seeded nodes, etc.), leaving exactly the
+        #    staged job. On the clean 0.9.9100 loader the boot-default roots were
+        #    removed during load() (staged elements appended); re-attach them first
+        #    (only roots no longer live) so the commit transaction detaches AND
+        #    re-attaches the exact original scene on both loader variants.
+        #    Detachment is reversible: if any old root fails to detach, the already-detached
         #    subtrees are re-attached and the staged job is rolled back so the
         #    original scene is left exactly as it was.
+        res_failed = _restore_pre(pre_roots, elements)
+        if res_failed:
+            # Could not re-establish the original scene; removing the staged
+            # job would leave the scene permanently degraded, so refuse to
+            # commit rather than report success while silently dropping roots.
+            _remove_nodes(added_ops + added_elems)
+            return {"error": "original scene could not be restored; staged job rejected (rollback incomplete)"}
         commit_err = _commit_replacement(elements, added_ids)
         if commit_err is not None:
             added_failed = _remove_nodes(added_ops + added_elems)
             if added_failed:
-                return {"error": "scene commit failed; rollback incomplete"}
+                return {"error": "%s; rollback incomplete for %d node(s)" % (commit_err, len(added_failed))}
             return {"error": commit_err}
     finally:
         try:
