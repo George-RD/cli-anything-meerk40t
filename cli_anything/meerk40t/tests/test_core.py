@@ -34,6 +34,7 @@ from cli_anything.meerk40t.utils.meerk40t_backend import (
 
 import cli_anything.meerk40t.meerk40t_cli as cli_mod
 from cli_anything.meerk40t.utils import submit as submit_mod
+from cli_anything.meerk40t.utils import profile_to_pr as p2p_mod
 import urllib.parse
 import subprocess
 
@@ -1803,6 +1804,181 @@ class TestProfileSubmitCli(unittest.TestCase):
         self.assertIn("error", data)
         self.assertNotIn("--machine requires --port", out)
 
+
+
+class TestProfileValidateCli(unittest.TestCase):
+    """CLI-level wiring for `profile validate` (side-effect free, no backend)."""
+
+    def _run_json(self, args, input_text=None):
+        import io
+        import sys
+        from click.testing import CliRunner
+
+        capture = io.StringIO()
+        orig = cli_mod._REAL_STDOUT
+        cli_mod._REAL_STDOUT = capture
+        try:
+            runner = CliRunner()
+            result = runner.invoke(
+                cli_mod.cli, ["--json"] + args, input=input_text
+            )
+        finally:
+            cli_mod._REAL_STDOUT = orig
+            sys.stdout = orig
+        return result, capture.getvalue()
+
+    def setUp(self):
+        self.good = profiles_mod.load_profile("sculpfun-s9")
+        self.assertIsNotNone(self.good)
+        self.good_json = json.dumps(self.good)
+
+    def test_cli_validate_valid_exits_zero(self):
+        result, out = self._run_json(
+            ["profile", "validate"], input_text=self.good_json
+        )
+        self.assertEqual(result.exit_code, 0, result.output)
+        data = json.loads(out)
+        self.assertTrue(data["ok"])
+        self.assertNotIn("validation_errors", data)
+
+    def test_cli_validate_reads_input_file(self):
+        import tempfile
+
+        tmp = tempfile.mkdtemp(prefix="mk_valin_")
+        try:
+            path = os.path.join(tmp, "profile.json")
+            with open(path, "w", encoding="utf-8") as fh:
+                fh.write(self.good_json)
+            result, out = self._run_json(
+                ["profile", "validate", "--input", path]
+            )
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+        self.assertEqual(result.exit_code, 0, result.output)
+        self.assertTrue(json.loads(out)["ok"])
+
+    def test_cli_validate_no_backend_started(self):
+        # Side-effect-free: the MeerK40t backend must never be constructed or
+        # started for `profile validate`.
+        with unittest.mock.patch.object(
+            cli_mod, "Meerk40tBackend"
+        ) as mock_backend:
+            result, out = self._run_json(
+                ["profile", "validate"], input_text=self.good_json
+            )
+        self.assertEqual(result.exit_code, 0, result.output)
+        mock_backend.assert_not_called()
+
+    def test_cli_validate_malformed_json_exits_one(self):
+        result, out = self._run_json(
+            ["profile", "validate"], input_text="{not valid json"
+        )
+        self.assertEqual(result.exit_code, 1, result.output)
+        self.assertNotIn("Traceback", result.output)
+        data = json.loads(out)
+        self.assertFalse(data["ok"])
+        self.assertIn("error", data)
+        self.assertIn("validation_errors", data)
+        self.assertEqual(data["validation_errors"], [])
+
+    def _assert_invalid(self, profile, expect_substr=None):
+        result, out = self._run_json(
+            ["profile", "validate"], input_text=json.dumps(profile)
+        )
+        self.assertEqual(result.exit_code, 1, result.output)
+        data = json.loads(out)
+        self.assertFalse(data["ok"])
+        self.assertIn("validation_errors", data)
+        self.assertTrue(data["validation_errors"])
+        if expect_substr:
+            self.assertTrue(
+                any(expect_substr in e for e in data["validation_errors"]),
+                data["validation_errors"],
+            )
+
+    def test_cli_validate_missing_required_key(self):
+        bad = dict(self.good)
+        del bad["baud"]
+        self._assert_invalid(bad, "missing required key: baud")
+
+    def test_cli_validate_wrong_type(self):
+        bad = dict(self.good)
+        bad["has_endstops"] = 0
+        self._assert_invalid(bad, "must be a bool")
+
+    def test_cli_validate_bool_for_int(self):
+        bad = dict(self.good)
+        bad["baud"] = True
+        self._assert_invalid(bad, "must be an int (got bool)")
+
+    def test_cli_validate_empty_provenance(self):
+        bad = dict(self.good)
+        bad["provenance"] = {}
+        self._assert_invalid(bad, "provenance")
+
+    def test_cli_validate_bad_name_regex(self):
+        bad = dict(self.good)
+        bad["name"] = "../evil"
+        self._assert_invalid(bad, "name must match")
+
+    def test_cli_validate_non_dict_payload(self):
+        result, out = self._run_json(
+            ["profile", "validate"], input_text=json.dumps([1, 2, 3])
+        )
+        self.assertEqual(result.exit_code, 1, result.output)
+        data = json.loads(out)
+        self.assertFalse(data["ok"])
+        self.assertTrue(data["validation_errors"])
+
+
+    def test_cli_validate_delegates_to_canonical_validator(self):
+        # The command must route through submit.validate_submission, not a
+        # second copy of the schema; the reported errors are exactly those
+        # the validator returns.
+        with unittest.mock.patch.object(
+            submit_mod, "validate_submission", return_value=["custom: nope"]
+        ):
+            result, out = self._run_json(
+                ["profile", "validate"], input_text=self.good_json
+            )
+        self.assertEqual(result.exit_code, 1, result.output)
+        data = json.loads(out)
+        self.assertFalse(data["ok"])
+        self.assertEqual(data["validation_errors"], ["custom: nope"])
+
+
+class TestProfileValidateUnit(unittest.TestCase):
+    """Unit behavior of `profile validate`: input-reading helper I/O."""
+
+    def setUp(self):
+        self.good = profiles_mod.load_profile("sculpfun-s9")
+        self.assertIsNotNone(self.good)
+
+    def test_helper_reads_stdin_when_no_file(self):
+        import io
+
+        stdin = io.StringIO(json.dumps(self.good))
+        with unittest.mock.patch.object(
+            cli_mod.sys, "stdin", stdin
+        ):
+            text = cli_mod._read_profile_input(None)
+        self.assertEqual(json.loads(text)["name"], "sculpfun-s9")
+
+    def test_helper_reads_input_file(self):
+        import tempfile
+
+        tmp = tempfile.mkdtemp(prefix="mk_valunit_")
+        try:
+            path = os.path.join(tmp, "p.json")
+            with open(path, "w", encoding="utf-8") as fh:
+                fh.write(json.dumps(self.good))
+            text = cli_mod._read_profile_input(path)
+            self.assertEqual(json.loads(text)["name"], "sculpfun-s9")
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+    def test_helper_missing_file_raises_oserror(self):
+        with self.assertRaises(OSError):
+            cli_mod._read_profile_input("/nonexistent/profile.json")
 
 
 class TestSkillPackaging(unittest.TestCase):
@@ -3833,3 +4009,228 @@ class TestParseGrblState(unittest.TestCase):
         self.assertEqual(serial_probe.parse_grbl_state("Idle"), ("Idle", None))
         self.assertEqual(serial_probe.parse_grbl_state(""), (None, None))
         self.assertEqual(serial_probe.parse_grbl_state(None), (None, None))
+
+
+# ── Issue #37: executable harness for profile-to-PR fail-closed flow ─────────
+def _subseq(hay, needle):
+    """True when ``needle`` is an ordered (non-contiguous) subsequence of ``hay``."""
+    n = list(needle)
+    if not n:
+        return True
+    it = iter(hay)
+    return all(any(item == part for item in it) for part in n)
+
+class _FakeRun:
+    """Injectable git/gh runner for run_flow tests.
+
+    Records every call; ``raise_on`` maps an argv subsequence to a forced
+    CalledProcessError, ``capture_return`` maps a subsequence to captured stdout,
+    ``rc_return`` maps a subsequence to a non-zero *signal* code for the
+    ``check=False`` probes. Any other ``check=False`` call defaults to rc 1
+    (the "present"/"exists" signal) so green flows proceed.
+    """
+
+    def __init__(self, *, raise_on=None, capture_return=None, rc_return=None):
+        self.calls = []
+        self.raise_on = raise_on or {}
+        self.capture_return = capture_return or {}
+        self.rc_return = rc_return or {}
+
+    def run(self, args, check=True, capture=False):
+        args = list(args)
+        self.calls.append(args)
+        for pref in self.raise_on:
+            if _subseq(args, list(pref)):
+                raise subprocess.CalledProcessError(1, args)
+        if capture:
+            for pref, val in self.capture_return.items():
+                if _subseq(args, list(pref)):
+                    return val
+            return ""
+        if not check:
+            for pref, rc in self.rc_return.items():
+                if _subseq(args, list(pref)):
+                    return rc
+            return 1
+        return 0
+
+
+class TestProfileToPrHarness(unittest.TestCase):
+    """Drive run_flow with injected gh/git runners (no network, no workspace)."""
+
+    def setUp(self):
+        self.valid = profiles_mod.load_profile("sculpfun-s9")
+        self.valid_body = (
+            "Intro text.\n```json\n"
+            + json.dumps(self.valid, indent=2)
+            + "\n```\nThanks."
+        )
+
+    def _live(self, body=None, state="OPEN", labels=("community-profile",)):
+        return {
+            "state": state,
+            "labels": [{"name": n} for n in labels],
+            "body": body if body is not None else self.valid_body,
+        }
+
+    def _flow(self, *, fetch, body=None, post_comment=None, run=None):
+        fr = run or _FakeRun()
+        written = []
+
+        def write_profile(name, text):
+            written.append(f"profiles/community/{name}.json")
+            return written[-1]
+
+        def post(num, text):
+            if post_comment is not None:
+                post_comment(num, text)
+
+        code = p2p_mod.run_flow(
+            issue_number=37,
+            load_issue_body=lambda: body if body is not None else self.valid_body,
+            fetch_issue=fetch,
+            post_comment=post,
+            run=fr.run,
+            write_profile=write_profile,
+            validate=submit_mod.validate_submission,
+        )
+        return code, fr.calls, written
+
+    # ── JSON extraction ──────────────────────────────────────────────────────
+    def test_extract_prefers_json_fence_over_leading_bash(self):
+        body = "```bash\necho hi\n```\n```json\n{\"a\": 1}\n```"
+        self.assertEqual(p2p_mod.extract_profile_json(body), '{"a": 1}')
+
+    def test_extract_no_code_block_returns_none(self):
+        self.assertIsNone(p2p_mod.extract_profile_json("no fences at all"))
+
+    # ── Freshness unit checks ────────────────────────────────────────────────
+    def test_freshness_ok_when_unchanged(self):
+        live = self._live()
+        p2p_mod.check_freshness(
+            p2p_mod.compute_body_hash(self.valid_body), live, submit_mod.validate_submission
+        )
+
+    def test_freshness_closed_state_raises(self):
+        live = self._live(state="CLOSED")
+        with self.assertRaises(p2p_mod.FreshnessError):
+            p2p_mod.check_freshness(
+                p2p_mod.compute_body_hash(self.valid_body), live, submit_mod.validate_submission
+            )
+
+    def test_freshness_label_removed_raises(self):
+        live = self._live(labels=())
+        with self.assertRaises(p2p_mod.FreshnessError):
+            p2p_mod.check_freshness(
+                p2p_mod.compute_body_hash(self.valid_body), live, submit_mod.validate_submission
+            )
+
+    def test_freshness_body_drift_raises(self):
+        live = self._live(body=self.valid_body + "\nEDIT")
+        with self.assertRaises(p2p_mod.FreshnessError):
+            p2p_mod.check_freshness(
+                p2p_mod.compute_body_hash(self.valid_body), live, submit_mod.validate_submission
+            )
+
+    def test_freshness_live_profile_invalid_raises(self):
+        bad = dict(self.valid)
+        bad.pop("baud", None)
+        bad_body = "```json\n" + json.dumps(bad) + "\n```"
+        live = self._live(body=bad_body)
+        with self.assertRaises(p2p_mod.FreshnessError):
+            p2p_mod.check_freshness(
+                p2p_mod.compute_body_hash(bad_body), live, submit_mod.validate_submission
+            )
+
+    # ── Full-flow harness: green + every failure class ────────────────────────
+    def test_flow_green_reaches_publish(self):
+        code, calls, _ = self._flow(fetch=lambda n: self._live())
+        self.assertEqual(code, 0)
+        self.assertTrue(any(c[: 3] == ["gh", "pr", "create"] for c in calls))
+        self.assertTrue(any(c[: 2] == ["git", "push"] for c in calls))
+    def test_flow_stale_before_branch_no_publish(self):
+        code, calls, written = self._flow(
+            fetch=lambda n: self._live(body=self.valid_body + "\nEDIT")
+        )
+        self.assertEqual(code, 1)
+        self.assertEqual(written, [], "no profile file should be written on abort")
+        self.assertFalse(any(c[: 2] == ["git", "checkout"] for c in calls))
+        self.assertFalse(any(_subseq(c, ["git", "commit"]) for c in calls))
+        self.assertFalse(any(c[: 2] == ["git", "push"] for c in calls))
+        self.assertFalse(any(c[: 3] == ["gh", "pr", "create"] for c in calls))
+
+    def test_flow_stale_before_push_no_publish(self):
+        state = {"n": 0}
+
+        def fetch(n):
+            state["n"] += 1
+            if state["n"] == 1:
+                return self._live(body=self.valid_body)
+            return self._live(body=self.valid_body + "\nEDIT")
+
+        code, calls, _ = self._flow(fetch=fetch)
+        self.assertEqual(code, 1)
+        self.assertTrue(any(c[: 2] == ["git", "checkout"] for c in calls))
+        self.assertTrue(any(_subseq(c, ["git", "commit"]) for c in calls))
+        self.assertFalse(any(c[: 2] == ["git", "push"] for c in calls))
+        self.assertFalse(any(c[: 3] == ["gh", "pr", "create"] for c in calls))
+
+    def test_flow_remote_branch_collision_aborts(self):
+        fr = _FakeRun(
+            capture_return={
+                ("git", "ls-remote"): "abc123\trefs/heads/profile/sculpfun-s9\n"
+            }
+        )
+        code, calls, _ = self._flow(fetch=lambda n: self._live(), run=fr)
+        self.assertEqual(code, 1)
+        self.assertFalse(any(c[: 2] == ["git", "checkout"] for c in calls))
+
+    def test_flow_local_branch_collision_aborts(self):
+        fr = _FakeRun(rc_return={("git", "show-ref"): 0})  # 0 == branch exists
+        code, calls, _ = self._flow(fetch=lambda n: self._live(), run=fr)
+        self.assertEqual(code, 1)
+        self.assertFalse(any(c[: 2] == ["git", "checkout"] for c in calls))
+
+    def test_flow_validation_failure_comment_error_nonzero(self):
+        # The real action runs `gh issue comment` with check=True, so a gh
+        # failure surfaces as CalledProcessError -- mirror that here.
+        def post(num, text):
+            raise subprocess.CalledProcessError(1, ["gh", "issue", "comment", str(num)])
+
+        code, calls, _ = self._flow(
+            fetch=lambda n: self._live(), body="no code block here", post_comment=post
+        )
+        self.assertEqual(code, 1)
+
+    def test_flow_commit_failure_nonzero(self):
+        fr = _FakeRun(raise_on={("git", "commit")})
+        code, calls, _ = self._flow(fetch=lambda n: self._live(), run=fr)
+        self.assertEqual(code, 1)
+        self.assertTrue(any(c[: 2] == ["git", "checkout"] for c in calls))
+        self.assertFalse(any(c[: 2] == ["git", "push"] for c in calls))
+
+    def test_flow_push_failure_nonzero(self):
+        fr = _FakeRun(raise_on={("git", "push")})
+        code, calls, _ = self._flow(fetch=lambda n: self._live(), run=fr)
+        self.assertEqual(code, 1)
+        self.assertTrue(any(c[: 2] == ["git", "push"] for c in calls))
+        self.assertFalse(any(c[: 3] == ["gh", "pr", "create"] for c in calls))
+
+    def test_flow_pr_creation_failure_nonzero(self):
+        fr = _FakeRun(raise_on={("gh", "pr", "create")})
+        code, calls, _ = self._flow(fetch=lambda n: self._live(), run=fr)
+        self.assertEqual(code, 1)
+        self.assertTrue(any(c[: 2] == ["git", "push"] for c in calls))
+        self.assertTrue(any(c[: 3] == ["gh", "pr", "create"] for c in calls))
+
+    def test_flow_showref_probe_error_nonzero(self):
+        fr = _FakeRun(rc_return={("git", "show-ref"): 2})  # unexpected code
+        code, calls, _ = self._flow(fetch=lambda n: self._live(), run=fr)
+        self.assertEqual(code, 1)
+        self.assertFalse(any(c[: 2] == ["git", "checkout"] for c in calls))
+
+    def test_flow_diff_probe_error_nonzero(self):
+        fr = _FakeRun(rc_return={("git", "diff", "--cached", "--quiet"): 2})
+        code, calls, _ = self._flow(fetch=lambda n: self._live(), run=fr)
+        self.assertEqual(code, 1)
+        self.assertFalse(any(_subseq(c, ["git", "commit"]) for c in calls))
