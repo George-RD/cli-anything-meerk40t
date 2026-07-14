@@ -21,7 +21,8 @@ import hashlib
 
 from cli_anything.meerk40t.utils import attach_client as attach_client_test
 import socket
-from cli_anything.meerk40t.utils.attach_envelope import encode_request, FRAME_PREFIX
+import threading
+from cli_anything.meerk40t.utils.attach_envelope import encode_request, FRAME_PREFIX, PROTOCOL_VERSION
 
 from cli_anything.meerk40t.core import elements
 from cli_anything.meerk40t.core import export
@@ -539,11 +540,25 @@ class TestAttachRoundTrip(unittest.TestCase):
 
         k = Kernel("MeerK40t", "0.0.0", "attachtest", ansi=False, ignore_settings=True)
         k.add_plugin(dummydevice.plugin)
+        from meerk40t.grbl import plugin as grbldevice
+        k.add_plugin(grbldevice.plugin)
+        from meerk40t.extra.coolant import plugin as coolantplugin
+        k.add_plugin(coolantplugin)
         k.add_plugin(mk.plugin)
         k.add_plugin(elements_mod.plugin)
+        from meerk40t.core import svg_io
+        k.add_plugin(svg_io.plugin)
         k.add_plugin(console_server.plugin)
         k.add_plugin(tcp_plugin)
         k(partial=True)
+        # Start a real (headless) grbl device so the mandatory machine-binding
+        # gate has a live device to bind against (provider module + 410x400mm
+        # bed matching the sculpfun-s9 profile) and elements.load has a valid
+        # device context. No serial port is opened in headless partial mode.
+        k.console("service device start -i grbl 0\n")
+        dev = k.device
+        dev.bedwidth = 410.0
+        dev.bedheight = 400.0
         server = k.root.open_as("module/TCPServer", "console-server", port=port)
         send = k.root.channel("console-server/send")
         send.greet = "cli-anything attach test console.\r\n"
@@ -605,7 +620,7 @@ class TestAttachRoundTrip(unittest.TestCase):
         )
         self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
         data = json.loads(res.stdout)
-        self.assertEqual(data["protocol"], 1)
+        self.assertEqual(data["protocol"], PROTOCOL_VERSION)
 
     def test_attach_stage_live(self):
         res = self._run(
@@ -615,13 +630,15 @@ class TestAttachRoundTrip(unittest.TestCase):
         )
         self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
         data = json.loads(res.stdout)
-        self.assertEqual(data["staged"], self.job_svg)
-        # The partial test kernel does not register the job loader, so the
-        # scene op-count is not meaningful here; the real load-and-replace
-        # behaviour is verified against Meerk40tBackend in
-        # test_core.TestStageFileScene. Assert the CLI/consoleserver wire
-        # contract: staging succeeds and returns the operations list.
+        # The live headless kernel registers the SVG loader and a grbl device,
+        # so staging genuinely loads the 3-colour fixture (3 elements). The full
+        # transactional commit is verified against Meerk40tBackend in
+        # test_core.TestStageFileScene; here we assert the CLI/consoleserver
+        # wire contract: staging succeeds and returns the staged element/op
+        # inventory.
+        self.assertEqual(data["elements"], 3)
         self.assertIsInstance(data["operations"], list)
+        self.assertGreater(len(data["operations"]), 0)
 
     def test_attach_status_closed(self):
         self.kernel.root.close("console-server")
@@ -800,14 +817,16 @@ class TestPR24Findings(TestAttachRoundTrip):
         with open(modified, "w", encoding="utf-8") as fh:
             fh.write(content + "\n<!-- tampered bytes -->\n")
 
-        with open(self.manifest, "r", encoding="utf-8") as fh:
-            manifest = json.load(fh)
         svg_bytes = open(modified, "rb").read()
         manifest_bytes = open(self.manifest, "rb").read()
+        mdata = json.loads(manifest_bytes)
+        gpath = os.path.join(os.path.dirname(self.manifest), mdata["files"]["gcode"]["path"])
+        gcode_bytes = open(gpath, "rb").read()
 
         # The kernel must refuse to load and return an error frame.
         reply = attach_client_test.send(
-            "localhost", self.port, "stage", manifest=manifest_bytes, svg=svg_bytes
+            "localhost", self.port, "stage", manifest=manifest_bytes,
+            svg=svg_bytes, gcode=gcode_bytes,
         )
         self.assertIn("error", reply, msg=f"expected error frame, got {reply}")
         self.assertIn("hash", reply["error"].lower())
@@ -818,9 +837,9 @@ class TestPR24Findings(TestAttachRoundTrip):
 
         # CLI side: a manifest whose recorded job_svg sha is wrong is refused
         # by preflight with a nonzero exit (the CLI maps a bad stage to nonzero).
-        tampered = dict(manifest)
-        tampered["files"] = dict(manifest["files"])
-        tampered["files"]["job_svg"] = dict(manifest["files"]["job_svg"])
+        tampered = dict(mdata)
+        tampered["files"] = dict(mdata["files"])
+        tampered["files"]["job_svg"] = dict(mdata["files"]["job_svg"])
         tampered["files"]["job_svg"]["sha256"] = "0" * 64
         tpath = os.path.join(self.temp_dir, "sha_tampered.json")
         with open(tpath, "w", encoding="utf-8") as fh:
@@ -857,10 +876,9 @@ class TestPR24Findings(TestAttachRoundTrip):
         )
         self.assertEqual(stage.returncode, 0, stage.stdout + stage.stderr)
         data = json.loads(stage.stdout)
-        self.assertEqual(data["staged"], spacer_svg)
-        # Wire contract only (see test_attach_stage_live); the partial kernel
-        # does not load job operations.
+        self.assertEqual(data["elements"], 3)
         self.assertIsInstance(data["operations"], list)
+        self.assertGreater(len(data["operations"]), 0)
 
 
 class TestIssue29AtomicMaterials(TestCLISubprocess):
@@ -912,8 +930,13 @@ class TestIssue31Phase1(TestAttachRoundTrip):
     """Issue #31 Phase 1: versioned, request-correlated wire envelope (live kernel)."""
 
     @staticmethod
-    def _read_frame(sock, timeout=2.0):
-        """Read from ``sock`` until a #CLIA1# frame line; return the parsed dict or None on timeout."""
+    def _read_frame(sock, timeout=2.0, request_id=None):
+        """Read from ``sock`` until a #CLIA1# frame line; return the parsed dict or None on timeout.
+
+        When ``request_id`` is provided, only a frame whose ``request_id``
+        matches is returned; other (e.g. broadcast) frames on the same socket
+        are skipped so each client correlates its own reply.
+        """
         sock.settimeout(timeout)
         buffer = b""
         while True:
@@ -931,17 +954,20 @@ class TestIssue31Phase1(TestAttachRoundTrip):
                     continue
                 payload = line[len(FRAME_PREFIX):]
                 try:
-                    return json.loads(payload)
+                    frame = json.loads(payload)
                 except json.JSONDecodeError:
                     continue
+                if request_id is not None and frame.get("request_id") != request_id:
+                    continue
+                return frame
 
     def test_status_reply_echoes_request_id(self):
         reply = attach_client_test.send("localhost", self.port, "status")
         self.assertIsInstance(reply, dict)
         self.assertIn("request_id", reply)
         self.assertTrue(reply["request_id"])
-        self.assertEqual(reply["v"], 1)
-        self.assertEqual(reply["protocol"], 1)
+        self.assertEqual(reply["v"], PROTOCOL_VERSION)
+        self.assertEqual(reply["protocol"], PROTOCOL_VERSION)
 
     def test_version_mismatch_rejected_with_request_id(self):
         token = encode_request(version=99, cmd="status", request_id="a" * 32)
@@ -975,25 +1001,100 @@ class TestIssue31Phase1(TestAttachRoundTrip):
             sock.close()
 
     def test_stage_metachar_path_never_interpreted(self):
+        # Non-vacuous variant: the manifest's recorded job_svg.path points at a
+        # DIFFERENT file (a single-rect SVG with a metacharacter in its name)
+        # than the bytes we actually transmit (the prepared 3-rect job). If the
+        # receiver loaded from `path`, the staged scene would have 1 element and
+        # the inventory check (manifest declares 3) would REFUSE. Staging must
+        # instead succeed with 3 elements, proving the receiver loads the
+        # TRANSMITTED bytes, never the path.
         spacer_dir = os.path.join(self.temp_dir, "job with; meta")
         os.makedirs(spacer_dir, exist_ok=True)
-        copied = os.path.join(spacer_dir, os.path.basename(self.job_svg))
-        shutil.copy(self.job_svg, copied)
-        svg_bytes = open(copied, "rb").read()
-        sha = hashlib.sha256(svg_bytes).hexdigest()
-        manifest_bytes = json.dumps(
-            {"files": {"job_svg": {"sha256": sha}}}
-        ).encode()
+        other_svg = os.path.join(spacer_dir, os.path.basename(self.job_svg))
+        with open(other_svg, "w", encoding="utf-8") as fh:
+            fh.write(
+                '<svg xmlns="http://www.w3.org/2000/svg" width="10mm" height="10mm" '
+                'viewBox="0 0 10 10"><rect x="1" y="1" width="5" height="5" '
+                'fill="none" stroke="#ff0000"/></svg>'
+            )
+        svg_bytes = open(self.job_svg, "rb").read()  # 3-rect prepared job
+        manifest = json.loads(open(self.manifest, "rb").read())
+        manifest["files"]["job_svg"]["path"] = other_svg  # metachar path, different file
+        manifest_bytes = json.dumps(manifest).encode()
+        gpath = os.path.join(
+            os.path.dirname(self.manifest), manifest["files"]["gcode"]["path"]
+        )
+        gcode_bytes = open(gpath, "rb").read()
         reply = attach_client_test.send(
-            "localhost", self.port, "stage", manifest=manifest_bytes, svg=svg_bytes
+            "localhost", self.port, "stage", manifest=manifest_bytes,
+            svg=svg_bytes, gcode=gcode_bytes, allow_estimated=True,
         )
         self.assertNotIn("error", reply)
-        loaded = reply.get("loaded", "")
-        self.assertNotIn("job with; meta", loaded)
-        self.assertTrue(
-            os.path.basename(loaded).startswith("mk_stage_"),
-            msg=f"receiver loaded from unexpected path: {loaded}",
+        # Proves the receiver staged the TRANSMITTED 3-rect bytes, not the path
+        # file (which has only 1 element and would have been refused).
+        self.assertEqual(reply.get("elements"), 3)
+        self.assertEqual(len(reply.get("operations", [])), 3)
+
+    def test_concurrent_stage_clients_correlated(self):
+        # Two independent clients (distinct sockets + threads) issue STAGE
+        # concurrently behind a barrier; each must receive only its own
+        # correlated reply frame (matching request_id), never the other's.
+        with open(self.manifest, "rb") as fh:
+            mbytes = fh.read()
+        mjson = json.loads(mbytes)
+        with open(self.job_svg, "rb") as fh:
+            svg_bytes = fh.read()
+        gpath = os.path.join(
+            os.path.dirname(self.manifest), mjson["files"]["gcode"]["path"]
         )
+        with open(gpath, "rb") as fh:
+            gcode_bytes = fh.read()
+
+        errors = []
+        results = {}
+
+        def stage_over_socket(rid):
+            tok = encode_request(
+                cmd="stage", request_id=rid, manifest=mbytes,
+                svg=svg_bytes, gcode=gcode_bytes, allow_estimated=True,
+            )
+            sock = socket.create_connection(("localhost", self.port), timeout=15.0)
+            try:
+                sock.sendall((f"agent {tok}" + "\n").encode("utf-8"))
+                return self._read_frame(sock, timeout=15.0, request_id=rid)
+            finally:
+                sock.close()
+
+        def worker(rid, key):
+            try:
+                barrier.wait()
+                results[key] = stage_over_socket(rid)
+            except Exception as exc:  # capture so joins don't hide it
+                errors.append((key, exc))
+
+        rid_a, rid_b = "a" * 32, "b" * 32
+        barrier = threading.Barrier(2)
+        ta = threading.Thread(target=worker, args=(rid_a, "a"))
+        tb = threading.Thread(target=worker, args=(rid_b, "b"))
+        ta.start()
+        tb.start()
+        ta.join(timeout=30)
+        tb.join(timeout=30)
+        self.assertFalse(errors, f"worker exceptions: {errors}")
+        self.assertFalse(ta.is_alive(), "client A thread still alive")
+        self.assertFalse(tb.is_alive(), "client B thread still alive")
+        self.assertIsNotNone(results.get("a"), "client A received no frame")
+        self.assertIsNotNone(results.get("b"), "client B received no frame")
+        self.assertEqual(results["a"]["request_id"], rid_a)
+        self.assertEqual(results["b"]["request_id"], rid_b)
+        # Each client must also have actually staged the 3-rect job (not merely
+        # correlated an error frame), proving concurrent STAGE works per-client.
+        for key in ("a", "b"):
+            self.assertNotIn(
+                "error", results[key], f"client {key} stage failed: {results[key]}"
+            )
+            self.assertEqual(results[key].get("elements"), 3)
+            self.assertEqual(len(results[key].get("operations", [])), 3)
 
     def test_legacy_literal_command_rejected(self):
         """ADR-0003 decision #3: no legacy protocol fallback. A literal

@@ -42,13 +42,16 @@ import json
 import secrets
 from typing import Any
 
-PROTOCOL_VERSION = 1
+PROTOCOL_VERSION = 2
 
 # Commands carried by the envelope. The receiver rejects any other value.
 _COMMANDS = ("status", "stage")
 
 # Console framing prefix shared with the receiver's reply lines.
 FRAME_PREFIX = "#CLIA1# "
+
+# `stage` envelopes MUST carry `gcode_b64` (the job G-code bytes); the receiver
+# recomputes modal-safety from those bytes. `status` envelopes ignore it.
 
 
 class AttachEnvelopeError(Exception):
@@ -83,13 +86,17 @@ def encode_request(
     request_id: str,
     manifest: bytes | None = None,
     svg: bytes | None = None,
+    gcode: bytes | None = None,
     version: int = PROTOCOL_VERSION,
+    allow_estimated: bool = False,
 ) -> str:
     """Build the single base64 request token for ``cmd``.
 
-    ``cmd`` must be ``"status"`` or ``"stage"``. ``manifest``/``svg`` are the raw
-    artifact bytes (or ``None``); they are base64-encoded inside the envelope so
-    the receiver never receives, reads, or interpolates a filesystem path.
+    ``cmd`` must be ``"status"`` or ``"stage"``. ``manifest``/``svg``/``gcode``
+    are the raw artifact bytes (or ``None``); they are base64-encoded inside the
+    envelope so the receiver never receives, reads, or interpolates a
+    filesystem path. For ``stage``, ``gcode`` is mandatory; ``status`` ignores
+    it.
     """
     if cmd not in _COMMANDS:
         raise AttachEnvelopeError(f"unsupported envelope command: {cmd!r}")
@@ -100,7 +107,9 @@ def encode_request(
         "request_id": request_id,
         "cmd": cmd,
         "manifest_b64": _b64_encode(manifest),
+        "allow_estimated": allow_estimated,
         "svg_b64": _b64_encode(svg),
+        "gcode_b64": _b64_encode(gcode),
     }
     try:
         raw = json.dumps(obj, separators=(",", ":")).encode("utf-8")
@@ -127,12 +136,17 @@ def decode_request(token: str) -> dict:
         raise AttachEnvelopeError(f"invalid envelope token: {exc}") from exc
     if not isinstance(obj, dict):
         raise AttachEnvelopeError("envelope token must decode to an object")
+    allow_estimated = obj.get("allow_estimated", False)
+    if not isinstance(allow_estimated, bool):
+        raise AttachEnvelopeError("envelope allow_estimated must be a boolean")
     return {
         "v": obj.get("v"),
         "request_id": obj.get("request_id"),
         "cmd": obj.get("cmd"),
         "manifest": _b64_decode(obj.get("manifest_b64")),
         "svg": _b64_decode(obj.get("svg_b64")),
+        "gcode": _b64_decode(obj.get("gcode_b64")),
+        "allow_estimated": allow_estimated,
     }
 
 

@@ -32,18 +32,19 @@ def _remaining_timeout(deadline: float | None) -> float | None:
     return remaining
 
 
-def send(host: str, port: int, cmd: str, manifest=None, svg=None, timeout: float = 5.0) -> dict:
+def send(host: str, port: int, cmd: str, manifest=None, svg=None, gcode=None, allow_estimated: bool = False, timeout: float = 5.0) -> dict:
     """Send a versioned, request-correlated envelope and return the matching #CLIA1# frame.
 
     A fresh ``request_id`` is minted per call; the reply frame must echo it
     (via :func:`reply_matches`) or it is skipped as stale/foreign output. Stale
     bytes are drained before the command is sent so previous commands' output
-    does not shadow this reply.
+    does not shadow this reply. For ``stage``, ``gcode`` is mandatory: the
+    receiver recomputes G-code modal-safety from the carried bytes.
     """
     deadline = time.monotonic() + timeout if timeout is not None else None
     request_id = new_request_id()
     try:
-        token = encode_request(cmd=cmd, request_id=request_id, manifest=manifest, svg=svg)
+        token = encode_request(cmd=cmd, request_id=request_id, manifest=manifest, svg=svg, gcode=gcode, allow_estimated=allow_estimated)
     except AttachEnvelopeError as exc:
         raise AttachError(f"failed to build attach request: {exc}") from exc
 

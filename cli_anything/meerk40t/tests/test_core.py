@@ -11,6 +11,7 @@ import sys
 import json
 import shutil
 import tempfile
+import hashlib
 import unittest
 import unittest.mock
 from unittest.mock import patch
@@ -1849,7 +1850,9 @@ class TestSkillPackaging(unittest.TestCase):
 
 from cli_anything.meerk40t.utils import materials as materials_mod
 from cli_anything.meerk40t.utils import job_prep as job_prep_mod
-from cli_anything.meerk40t.utils.attach_envelope import decode_request, format_reply, FRAME_PREFIX
+from cli_anything.meerk40t.utils.attach_envelope import decode_request, format_reply, FRAME_PREFIX, PROTOCOL_VERSION
+from cli_anything.meerk40t import mk_control as _mkc_mod
+from cli_anything.meerk40t.utils.attach_envelope import encode_request
 from cli_anything.meerk40t.utils.attach_client import (
     send as attach_send,
     AttachError,
@@ -2295,7 +2298,7 @@ class TestAttachClientFrame(unittest.TestCase):
         self.assertEqual(reply["devices"], ["sculpfun-s9"])
         self.assertEqual(reply["protocol"], 1)
         self.assertTrue(reply["request_id"])
-        self.assertEqual(reply["v"], 1)
+        self.assertEqual(reply["v"], PROTOCOL_VERSION)
 
     def test_prose_only_raises_attacherror(self):
         port = self._serve(["kernel banner line", "warning: warming up"])
@@ -2309,7 +2312,7 @@ class TestAttachClientFrame(unittest.TestCase):
         reply = attach_send("127.0.0.1", port, "status", timeout=2.0)
         self.assertEqual(reply["elements"], 3)
         self.assertTrue(reply["request_id"])
-        self.assertEqual(reply["v"], 1)
+        self.assertEqual(reply["v"], PROTOCOL_VERSION)
 
     def test_stale_frame_skipped_returns_correlated(self):
         stale_rid = "0" * 32
@@ -2319,96 +2322,453 @@ class TestAttachClientFrame(unittest.TestCase):
         reply = attach_send("127.0.0.1", port, "status", timeout=2.0)
         self.assertIs(reply.get("real"), True)
         self.assertNotIn("stale", reply)
-        self.assertNotEqual(reply["request_id"], stale_rid)
-
-class TestStageFileScene(unittest.TestCase):
-    """`mk_control._stage_file` against a real backend: load, replace, refuse.
+class TestStageFileScene(JobFixtureTestCase):
+    """`mk_control._stage_file` against a real grbl backend: load, replace, refuse.
 
     This is the authoritative coverage for the attach-stage scene contract
-    (PR #24 findings 3+4). The consoleserver E2E harness boots a partial kernel
-    that does not register the job loader, so scene behaviour is verified here
-    against Meerk40tBackend, which loads jobs exactly as a running GUI does.
+    (issue #31, phases 2-4). The consoleserver E2E harness boots a partial
+    kernel that does not register the job loader, so scene behaviour is
+    verified here against Meerk40tBackend, which loads jobs exactly as a
+    running GUI does. Every refusal path asserts the pre-existing scene is
+    left byte-for-byte untouched, and the commit path asserts exact-node
+    restoration on failure.
     """
 
     def setUp(self):
-        import base64 as _b64
-        import hashlib as _hl
-        import cli_anything.meerk40t.mk_control as _mkc
-        self._b64 = _b64
-        self._hl = _hl
-        self._mkc = _mkc
         self.temp_dir = tempfile.mkdtemp(prefix="mk_stage_")
-        self.backend = Meerk40tBackend()
+        self.backend = Meerk40tBackend(device="grbl", port=None, baud=115200)
         self.backend.start()
+        self.kernel = self.backend.kernel
+        # Live bed matches the sculpfun-s9 profile (410x400mm) so a valid job
+        # binds without a spurious bed mismatch.
+        self.kernel.device.bedwidth = 410.0
+        self.kernel.device.bedheight = 400.0
 
     def tearDown(self):
         self.backend.shutdown()
         shutil.rmtree(self.temp_dir, ignore_errors=True)
 
-    def _make_job(self):
+    # ── fixtures ────────────────────────────────────────────────────────────
+    def _three_stroke_svg(self, xoffset=0, size=50):
+        return (
+            f'<svg xmlns="http://www.w3.org/2000/svg" width="{size}mm" '
+            f'height="{size}mm" viewBox="0 0 {size} {size}">'
+            f'<rect x="{1 + xoffset}" y="1" width="10" height="10" '
+            f'fill="none" stroke="#ff0000"/>'
+            f'<rect x="{15 + xoffset}" y="15" width="10" height="10" '
+            f'fill="none" stroke="#0000ff"/>'
+            f'<rect x="{30 + xoffset}" y="30" width="10" height="10" '
+            f'fill="none" stroke="#000000"/>'
+            "</svg>"
+        )
+
+    def _prepare_kraft(self):
+        """A valid 3-op job (engrave/engrave/cut) via the bundled kraft material."""
         d = tempfile.mkdtemp(dir=self.temp_dir)
         svg = os.path.join(d, "in.svg")
         with open(svg, "w", encoding="utf-8") as fh:
-            fh.write(
-                '<svg xmlns="http://www.w3.org/2000/svg" width="50mm" '
-                'height="50mm" viewBox="0 0 50 50">'
-                '<rect x="1" y="1" width="10" height="10" fill="none" stroke="#ff0000"/>'
-                '<rect x="1" y="15" width="10" height="10" fill="none" stroke="#0000ff"/>'
-                '<rect x="1" y="30" width="10" height="10" fill="none" stroke="#000000"/>'
-                "</svg>"
-            )
-        return job_prep_mod.prepare_job(
+            fh.write(self._three_stroke_svg())
+        summary = job_prep_mod.prepare_job(
             svg, d, machine="sculpfun-s9", material="kraft-350gsm",
             allow_estimated=True,
-        )["job_svg"]
+        )
+        manifest = json.loads(open(summary["manifest"]).read())
+        return summary["job_svg"], manifest
 
-    def _sha(self, path):
-        h = self._hl.sha256()
-        with open(path, "rb") as fh:
-            h.update(fh.read())
-        return h.hexdigest()
+    def _prepare_wide(self):
+        """A valid 3-op job (engrave/engrave/cut) whose geometry exceeds the
+        410mm live bed. Prepared through the normal pipeline so the manifest
+        matches the staged SVG exactly; the only refusal the receiver should
+        raise is the live-bed bounds check."""
+        d = tempfile.mkdtemp(dir=self.temp_dir)
+        svg = os.path.join(d, "wide.svg")
+        with open(svg, "w", encoding="utf-8") as fh:
+            fh.write(self._three_stroke_svg(xoffset=450, size=500))
+        summary = job_prep_mod.prepare_job(
+            svg, d, machine="sculpfun-s9", material="kraft-350gsm",
+            allow_estimated=True,
+        )
+        manifest = json.loads(open(summary["manifest"]).read())
+        return summary["job_svg"], manifest
 
-    def _b64path(self, path):
-        return self._b64.b64encode(os.path.abspath(path).encode("utf-8")).decode("ascii")
+    def _prepare_estimated(self):
+        """A 1-op cut job whose role is genuinely estimated (user fixture).
 
-    def _stage(self, path, sha):
-        with open(path, "rb") as fh:
+        The fixture material is written to ``self.temp_dir``; the caller must
+        leave ``CLI_ANYTHING_CONFIG_HOME`` pointing at that home while staging
+        (the receiver re-resolves the material from the trusted store).
+        """
+        out = tempfile.mkdtemp(dir=self.temp_dir)
+        svg = os.path.join(out, "in.svg")
+        self._make_red_svg(svg)
+        self._make_cut_material("stage-est", self.temp_dir)
+        summary = job_prep_mod.prepare_job(
+            svg, out, machine="sculpfun-s9", material="stage-est",
+            color_map={"#ff0000": "cut"}, allow_estimated=True,
+            config_home=self.temp_dir,
+        )
+        manifest = json.loads(open(summary["manifest"]).read())
+        return summary["job_svg"], manifest
+
+    def _stage(self, svg_path, manifest, *, allow_estimated=True, gcode_override=None, gcode_missing=False):
+        with open(svg_path, "rb") as fh:
             svg_bytes = fh.read()
-        manifest = {"files": {"job_svg": {"sha256": sha}}}
         manifest_bytes = json.dumps(manifest).encode("utf-8")
-        return self._mkc._stage_file(self.backend.kernel, svg_bytes, manifest_bytes)
+        if gcode_missing:
+            gcode_bytes = None
+        elif gcode_override is not None:
+            gcode_bytes = gcode_override
+        else:
+            gcode_rel = (manifest.get("files", {}) or {}).get("gcode", {}) or {}
+            gcode_path = gcode_rel.get("path")
+            gcode_bytes = None
+            if gcode_path:
+                gcode_bytes = open(os.path.join(os.path.dirname(svg_path), gcode_path), "rb").read()
+        return _mkc_mod._stage_file(
+            self.kernel, svg_bytes, manifest_bytes, allow_estimated=allow_estimated,
+            gcode_bytes=gcode_bytes,
+        )
 
+    def _scene(self):
+        el = self.kernel.elements
+        return len(list(el.ops())), len(list(el.elems()))
+
+    def _snapshot(self):
+        snap = {}
+        for n in _mkc_mod._all_nodes(self.kernel.elements):
+            parent = n.parent
+            idx = parent._children.index(n) if parent is not None else None
+            snap[id(n)] = (id(parent), idx, n.type)
+        return snap
+
+    # ── success / replace ────────────────────────────────────────────────────
     def test_stage_loads_job(self):
-        job = self._make_job()
-        reply = self._stage(job, self._sha(job))
-        self.assertIsNone(reply.get("error"))
+        svg_path, manifest = self._prepare_kraft()
+        reply = self._stage(svg_path, manifest)
+        self.assertNotIn("error", reply)
         self.assertEqual(reply["elements"], 3)
         self.assertEqual(len(reply["operations"]), 3)
 
     def test_stage_replaces_scene_no_accumulation(self):
-        job_a = self._make_job()
-        job_b = self._make_job()
-        first = self._stage(job_a, self._sha(job_a))
-        second = self._stage(job_b, self._sha(job_b))
-        # The second stage must REPLACE, not accumulate: staging two jobs still
-        # leaves exactly one job's operations and elements in the scene.
-        self.assertEqual(second["elements"], first["elements"])
-        self.assertEqual(len(second["operations"]), len(first["operations"]))
+        svg_a, man_a = self._prepare_kraft()
+        svg_b, man_b = self._prepare_kraft()
+        self.assertNotIn("error", self._stage(svg_a, man_a))
+        second = self._stage(svg_b, man_b)
+        self.assertNotIn("error", second)
+        # A second stage REPLACES, never accumulates: exactly one job remains.
         self.assertEqual(second["elements"], 3)
+        self.assertEqual(len(second["operations"]), 3)
+        self.assertEqual(self._scene(), (3, 3))
 
+    # ── refusal paths: scene untouched ───────────────────────────────────────
     def test_stage_hash_mismatch_refused_scene_untouched(self):
-        job = self._make_job()
-        self._stage(job, self._sha(job))
-        el = self.backend.kernel.elements
-        before_ops = len(list(el.ops()))
-        before_elems = len(list(el.elems()))
-        # A wrong expected hash must return an error frame and leave the scene
-        # untouched (nothing loaded, nothing removed).
-        reply = self._stage(job, "0" * 64)
+        svg_path, manifest = self._prepare_kraft()
+        self.assertNotIn("error", self._stage(svg_path, manifest))
+        before = self._scene()
+        bad = {
+            **manifest,
+            "files": {
+                **manifest["files"],
+                "job_svg": {**manifest["files"]["job_svg"], "sha256": "0" * 64},
+            },
+        }
+        reply = self._stage(svg_path, bad)
         self.assertIn("error", reply)
         self.assertIn("hash", reply["error"].lower())
-        self.assertEqual(len(list(el.ops())), before_ops)
-        self.assertEqual(len(list(el.elems())), before_elems)
+        self.assertEqual(self._scene(), before)
+
+    def test_stage_unknown_machine_refused(self):
+        svg_path, manifest = self._prepare_kraft()
+        before = self._scene()
+        with patch.object(_mkc_mod, "load_profile", return_value=None):
+            reply = self._stage(svg_path, manifest)
+        self.assertIn("error", reply)
+        self.assertIn("unknown machine profile", reply["error"])
+        self.assertEqual(self._scene(), before)
+
+    def test_stage_provider_mismatch_refused(self):
+        svg_path, manifest = self._prepare_kraft()
+        before = self._scene()
+        with patch.object(
+            _mkc_mod,
+            "load_profile",
+            return_value={"device": "lihuiyu", "bedwidth": "410mm", "bedheight": "400mm"},
+        ):
+            reply = self._stage(svg_path, manifest)
+        self.assertIn("error", reply)
+        self.assertIn("machine binding refused", reply["error"])
+        self.assertIn("lihuiyu", reply["error"])
+        self.assertEqual(self._scene(), before)
+
+    def test_stage_bed_mismatch_refused(self):
+        svg_path, manifest = self._prepare_kraft()
+        before = self._scene()
+        self.kernel.device.bedwidth = 300.0
+        self.kernel.device.bedheight = 200.0
+        try:
+            reply = self._stage(svg_path, manifest)
+        finally:
+            self.kernel.device.bedwidth = 410.0
+            self.kernel.device.bedheight = 400.0
+        self.assertIn("error", reply)
+        self.assertIn("machine binding refused", reply["error"])
+        self.assertIn("bed", reply["error"])
+        self.assertEqual(self._scene(), before)
+
+    def test_stage_inventory_mismatch_refused(self):
+        svg_path, manifest = self._prepare_kraft()
+        before = self._scene()
+        # Keep roles/estimated_roles intact so preflight passes; only inflate the
+        # declared element count so the loaded scene mismatches the manifest.
+        ops = [dict(o) for o in manifest["operations"]]
+        ops[0] = dict(ops[0])
+        ops[0]["elements"] = ops[0].get("elements", 0) + 1
+        tampered = {**manifest, "operations": ops}
+        reply = self._stage(svg_path, tampered)
+        self.assertIn("error", reply)
+        self.assertIn("inventory mismatch", reply["error"])
+        self.assertEqual(self._scene(), before)
+
+    def test_stage_estimated_gate(self):
+        svg_path, manifest = self._prepare_estimated()
+        with patch.dict(os.environ, {"CLI_ANYTHING_CONFIG_HOME": self.temp_dir}):
+            before = self._scene()
+            # Without --allow-estimated the estimated role is refused.
+            reply = self._stage(svg_path, manifest, allow_estimated=False)
+            self.assertIn("error", reply)
+            self.assertIn("allow-estimated", reply["error"])
+            self.assertEqual(self._scene(), before)
+            # With the flag it loads cleanly (1 op / 1 elem).
+            reply2 = self._stage(svg_path, manifest, allow_estimated=True)
+        self.assertNotIn("error", reply2)
+        self.assertEqual(reply2["elements"], 1)
+        self.assertEqual(len(reply2["operations"]), 1)
+
+    # ── loader rollbacks ─────────────────────────────────────────────────────
+    def test_stage_loader_exception_rolls_back(self):
+        svg_path, manifest = self._prepare_kraft()
+        before = self._scene()
+        with patch.object(self.kernel.elements, "load", side_effect=RuntimeError("boom")):
+            with self.assertRaises(RuntimeError):
+                self._stage(svg_path, manifest)
+        self.assertEqual(self._scene(), before)
+
+    def test_stage_loader_false_rolls_back(self):
+        svg_path, manifest = self._prepare_kraft()
+        before = self._scene()
+        with patch.object(self.kernel.elements, "load", return_value=False):
+            reply = self._stage(svg_path, manifest)
+        self.assertIn("error", reply)
+        self.assertIn("loader returned false", reply["error"])
+        self.assertEqual(self._scene(), before)
+
+    # ── regression B1: commit rollback restores exact sibling order ──────────
+    def test_commit_replacement_middle_sibling_rollback_order(self):
+        class FakeNode:
+            def __init__(self, name, parent=None):
+                self.name = name
+                self.parent = parent
+                self.children = []
+                self._raise = False
+            def remove_node(self, children=False, references=False, destroy=False):
+                if self._raise:
+                    raise RuntimeError("detach boom")
+                if self.parent is not None:
+                    self.parent.children.remove(self)
+                    self.parent = None
+            def add_node(self, node, pos=None):
+                if pos is None:
+                    self.children.append(node)
+                else:
+                    self.children.insert(pos, node)
+                node.parent = self
+        class FakeElements:
+            def __init__(self):
+                self.root = FakeNode("root")
+            def _seed(self):
+                for nm in ["A", "B", "C", "D", "E"]:
+                    n = FakeNode(nm, self.root)
+                    self.root.children.append(n)
+            def ops(self):
+                return []
+            def elems(self):
+                return list(self.root.children)
+        fake = FakeElements()
+        fake._seed()
+        self.assertEqual([n.name for n in fake.root.children], ["A", "B", "C", "D", "E"])
+        # The middle sibling raises on detach; forward-order rollback must
+        # restore the exact original ordering (a reversed rollback would yield
+        # [A, C, B, D, E]).
+        fake.root.children[2]._raise = True
+        err = _mkc_mod._commit_replacement(fake, set())
+        self.assertEqual([n.name for n in fake.root.children], ["A", "B", "C", "D", "E"])
+        self.assertEqual(err, "scene commit failed; staged job rolled back")
+
+    # ── regression M1: g-code mandatory for staging (modal-safety recompute) ─
+    def test_stage_requires_gcode_refused(self):
+        svg_path, manifest = self._prepare_kraft()
+        before = self._scene()
+        # gcode_missing=True emulates an envelope that carries no g-code bytes.
+        reply = self._stage(svg_path, manifest, gcode_missing=True)
+        self.assertIn("error", reply)
+        self.assertIn("g-code", reply["error"].lower())
+        self.assertEqual(self._scene(), before)
+
+    def test_stage_gcode_modal_safety_refused(self):
+        svg_path, manifest = self._prepare_kraft()
+        before = self._scene()
+        # Unsafe g-code: a powered move with no feed rate (G1 without F) and a
+        # live burn. Update the manifest's recorded g-code sha so the hash gate
+        # passes; the recomputed modal-safety must then refuse, leaving the
+        # scene untouched.
+        unsafe = "G21\nG90\nM3 S100\nG1 X10 Y10\n"
+        manifest["files"]["gcode"]["sha256"] = hashlib.sha256(unsafe.encode()).hexdigest()
+        reply = self._stage(svg_path, manifest, gcode_override=unsafe.encode())
+        self.assertIn("error", reply)
+        # Hash gate passed (manifest sha updated) - the refusal is modal safety.
+        self.assertNotIn("hash", reply["error"].lower())
+        self.assertIn("verification", reply["error"].lower())
+        self.assertEqual(self._scene(), before)
+
+    # ── regression M2 (a-d): refuse bad geometry / manifest before mutation ──
+    def test_stage_geometry_exceeds_bed_refused(self):
+        svg_path, manifest = self._prepare_wide()
+        before = self._scene()
+        reply = self._stage(svg_path, manifest)
+        self.assertIn("error", reply)
+        self.assertIn("bed", reply["error"].lower())
+        self.assertEqual(self._scene(), before)
+
+    def test_stage_invalid_manifest_refused(self):
+        svg_path, manifest = self._prepare_kraft()
+        before = self._scene()
+        gcode_rel = (manifest.get("files", {}) or {}).get("gcode", {}) or {}
+        gpath = os.path.join(os.path.dirname(svg_path), gcode_rel.get("path"))
+        with open(svg_path, "rb") as fh:
+            svg_bytes = fh.read()
+        with open(gpath, "rb") as fh:
+            gcode_bytes = fh.read()
+        # Structurally invalid manifest (missing required fields) is refused by
+        # the shared validator before any load - the scene is untouched.
+        reply = _mkc_mod._stage_file(
+            self.kernel, svg_bytes, json.dumps({"not": "a job manifest"}).encode(),
+            gcode_bytes=gcode_bytes,
+        )
+        self.assertIn("error", reply)
+        self.assertEqual(self._scene(), before)
+
+    def test_stage_fingerprint_drift_refused(self):
+        svg_path, manifest = self._prepare_kraft()
+        before = self._scene()
+        tampered = {**manifest, "settings_fingerprint": "0" * 64}
+        reply = self._stage(svg_path, tampered)
+        self.assertIn("error", reply)
+        self.assertIn("settings", reply["error"].lower())
+        self.assertEqual(self._scene(), before)
+
+    def test_stage_empty_operations_refused(self):
+        svg_path, manifest = self._prepare_kraft()
+        before = self._scene()
+        # A manifest declaring zero operations has no valid burn power, so the
+        # recomputed modal-safety verdict (no valid burn present) must refuse
+        # before the scene is touched. The manifest's g-code sha stays valid so
+        # the refusal is isolated to the safety recompute, not a hash drift.
+        tampered = {**manifest, "operations": []}
+        reply = self._stage(svg_path, tampered)
+        self.assertIn("error", reply)
+        self.assertIn("verification", reply["error"].lower())
+        self.assertNotIn("hash", reply["error"].lower())
+        self.assertEqual(self._scene(), before)
+
+    # ── commit-failure transaction safety (identity-strong) ──────────────────
+    def _seed_prior_scene(self):
+        baseline = self._snapshot()
+        self.backend.run("circle 1in 1in 1in")
+        self.backend.run("element* classify")
+        after_seed = self._snapshot()
+        seeded_ids = set(after_seed) - set(baseline)
+        self.assertTrue(seeded_ids, "classify should add at least one node")
+        return baseline, seeded_ids, after_seed
+
+    def test_stage_commit_failure_restores_original(self):
+        _baseline, seeded_ids, after_seed = self._seed_prior_scene()
+        svg_path, manifest = self._prepare_kraft()
+        # Force the seeded element to raise on detach so commit cannot complete;
+        # the staged job must be rolled back and the original scene restored.
+        elem_id = next(
+            nid for nid in seeded_ids if "elem" in (after_seed[nid][2] or "").lower()
+        )
+        elem_node = next(
+            n for n in _mkc_mod._all_nodes(self.kernel.elements) if id(n) == elem_id
+        )
+        with patch.object(elem_node, "remove_node", side_effect=RuntimeError("detach boom")):
+            reply = self._stage(svg_path, manifest)
+        self.assertIn("error", reply)
+        after = self._snapshot()
+        self.assertEqual(
+            set(after), set(after_seed),
+            "original scene must be fully restored after rollback",
+        )
+        self.assertEqual(after, after_seed, "restored scene must match pre-stage exactly")
+
+    def test_stage_commit_failure_rollback_incomplete(self):
+        _baseline, seeded_ids, after_seed = self._seed_prior_scene()
+        svg_path, manifest = self._prepare_kraft()
+        # Break the re-attach of a pre-existing (baseline) node so the rollback
+        # cannot complete once the new element's detach raises during commit.
+        # The faulty add_node only rejects the *original* node, so the live load
+        # (which attaches different node objects) is unaffected.
+        old_node = next(
+            n for n in _mkc_mod._all_nodes(self.kernel.elements) if id(n) in _baseline
+        )
+        root = old_node.parent
+        real_add = root.add_node
+        def faulty_add(node, pos=None, **kw):
+            if node is old_node:
+                raise RuntimeError("attach boom")
+            return real_add(node, pos=pos, **kw)
+        elem_id = next(
+            nid for nid in seeded_ids if "elem" in (after_seed[nid][2] or "").lower()
+        )
+        elem_node = next(
+            n for n in _mkc_mod._all_nodes(self.kernel.elements) if id(n) == elem_id
+        )
+        with patch.object(elem_node, "remove_node", side_effect=RuntimeError("detach boom")), \
+             patch.object(root, "add_node", side_effect=faulty_add):
+            reply = self._stage(svg_path, manifest)
+        self.assertIn("error", reply)
+        self.assertIn("rollback incomplete", reply["error"])
+
+    # ── direct binding-helper diagnostics (issue #31 advisory) ───────────────
+    def test_check_machine_binding_helper(self):
+        self.assertIsNone(
+            _mkc_mod._check_machine_binding(self.kernel, {"machine": "sculpfun-s9"})
+        )
+        with patch.object(
+            _mkc_mod,
+            "load_profile",
+            return_value={"device": "lihuiyu", "bedwidth": "410mm", "bedheight": "400mm"},
+        ):
+            err = _mkc_mod._check_machine_binding(self.kernel, {"machine": "sculpfun-s9"})
+        self.assertIsNotNone(err)
+        self.assertIn("machine binding refused", err)
+        self.assertIn("lihuiyu", err)
+        with patch.object(_mkc_mod, "load_profile", return_value=None):
+            err2 = _mkc_mod._check_machine_binding(self.kernel, {"machine": "ghost"})
+        self.assertIn("unknown machine profile", err2)
+
+
+class TestAttachEnvelopeEstimated(unittest.TestCase):
+    """The versioned envelope must carry the allow_estimated gate end to end."""
+
+    def test_envelope_round_trips_allow_estimated(self):
+        tok = encode_request(
+            cmd="stage", request_id="a" * 32, manifest=b"{}", svg=b"x",
+            allow_estimated=True,
+        )
+        self.assertTrue(decode_request(tok)["allow_estimated"])
+        tok2 = encode_request(cmd="stage", request_id="b" * 32, allow_estimated=False)
+        self.assertFalse(decode_request(tok2)["allow_estimated"])
 
 
 class TestSaveVerification(BackendTestCase):
