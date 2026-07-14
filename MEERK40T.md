@@ -61,7 +61,7 @@ kernel instance (the same code path as `meerk40t -z`) and drives it via
  5. `machine`: list profiles (bundled and user, with origin)
  6. `materials`: list, show, create, record (calibrated laser settings per machine)
  7. `job`: prepare (material-driven job SVG + G-code + manifest), preflight (re-verify a manifest), ladder (calibration pattern on scrap)
- 8. `export`: render SVG/PNG/DXF via the real backend
+ 8. `export`: SVG (real backend); PNG (GUI-dependent); G-code (GRBL device required) — no DXF export
  9. `console`: pass-through to the raw kernel console (escape hatch)
  10. `session`: undo, redo, history, status
  11. `repl`: interactive stateful shell (default when no subcommand)
@@ -218,6 +218,16 @@ persistent socket with drain-before-send (telnet replies lag); explicit
 `set -p grbl ...` context paths; and the CONNECTION-FIRST gate - port
 enumerated, connection opened, controller answers Idle - before staging
 anything the operator will Start.
+
+> **Security boundary.** The MeerK40t consoleserver is **unauthenticated**: it
+> has no password or access control. Keep the listener on loopback and
+> firewall-restricted — verify it is bound to `127.0.0.1`/`::1`, not a wildcard
+> (`0.0.0.0`/`::`), and never expose the port to a network or forward it. The
+> request/reply correlation used by `attach stage` does **not** authenticate
+> either end and does **NOT** make the channel safe to expose to the internet —
+> it only pairs a staging request with its reply over an already-trusted local
+> link. See the skill's gui-operation reference for the full boundary guidance.
+
 ## Community machine profiles
 
 Operators can contribute verified machine profiles to the shared collection

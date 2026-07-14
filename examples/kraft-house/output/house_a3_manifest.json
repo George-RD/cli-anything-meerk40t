@@ -1,25 +1,26 @@
 {
   "schema": "clia-job-manifest-v1",
   "kind": "job",
-  "created": "2026-07-12T10:52:23.106261+00:00",
+  "created": "2026-07-14T16:46:17.260230+00:00",
   "machine": "sculpfun-s9",
   "material": "kraft-350gsm",
   "files": {
     "input_svg": {
-      "path": "/Users/george/repos/cli-anything-meerk40t/examples/kraft-house/house_a3.svg",
+      "path": "../house_a3.svg",
       "sha256": "ff6c75e2423833bd644cf8a4bce0573780ac27f961aa292c98f9ea935c403d89"
     },
     "job_svg": {
-      "path": "/Users/george/repos/cli-anything-meerk40t/examples/kraft-house/output/house_a3_job.svg",
+      "path": "house_a3_job.svg",
       "sha256": "bd43b8bd01e9f1336123d0674598be2a18c9e7eb784ce6750507ab37bcaafd22"
     },
     "gcode": {
-      "path": "/Users/george/repos/cli-anything-meerk40t/examples/kraft-house/output/house_a3.gcode",
+      "path": "house_a3.gcode",
       "sha256": "439296c0c46cc6a35ac1d86eb91e90f840909e55c660d8afe5f49c27ebe268a2"
     }
   },
   "operations": [
     {
+      "role": "etch",
       "kind": "engrave",
       "color": "#000000",
       "passes": 1,
@@ -28,6 +29,7 @@
       "elements": 428
     },
     {
+      "role": "score",
       "kind": "engrave",
       "color": "#0000ff",
       "passes": 1,
@@ -36,6 +38,7 @@
       "elements": 13
     },
     {
+      "role": "cut",
       "kind": "cut",
       "color": "#ff0000",
       "passes": 1,
@@ -51,8 +54,20 @@
   "settings_fingerprint": "477ed6e3f640a5c3015b897356bf04b1c1c4e1ad2a98c55a4848d5112b81f2f0",
   "verification": {
     "header_ok": true,
+    "units_metric": true,
+    "coord_absolute": true,
     "travel_s0_ok": true,
     "burn_s_ok": true,
+    "feed_ok": true,
+    "end_ok": true,
+    "arcs_ok": true,
+    "in_bounds": true,
+    "ordering_ok": true,
+    "pass_coverage_ok": true,
+    "ladder_coverage": true,
+    "beam_off": true,
+    "no_unassigned": true,
+    "all_passed": true,
     "s_values": [
       0,
       280,
@@ -65,7 +80,6 @@
       380,
       650
     ],
-    "end_ok": true,
     "x_range": [
       19.99,
       391.998
@@ -74,9 +88,13 @@
       116.002,
       384.988
     ],
-    "in_bounds": true,
-    "unassigned_elements": [],
-    "no_unassigned": true,
-    "all_passed": true
+    "burn_s_seen": [
+      0,
+      280,
+      380,
+      650
+    ],
+    "notes": [],
+    "unassigned_elements": []
   }
 }

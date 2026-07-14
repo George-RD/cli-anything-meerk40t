@@ -18,7 +18,7 @@ When folded, the footprint is 100 mm × 80 mm. The height to the ridge is about 
 - `house_a3.svg`: the cut file. Three layers keyed by stroke colour.
 - `generate.py`: makes the SVG and checks its own geometry. Run with `python3 examples/kraft-house/generate.py`.
 - `prepare_job.py`: builds a MeerK40t job and G-code from the SVG. Run with the repo venv: `.venv/bin/python examples/kraft-house/prepare_job.py examples/kraft-house/house_a3.svg --out-dir examples/kraft-house/output --json`.
-- `output/house_a3_job.svg`, `output/house_a3.gcode`, and `output/house_a3_manifest.json`: prepared job artefacts (the manifest records file hashes, the material profile, and a settings fingerprint). Regenerate them after any change to the SVG.
+- `output/house_a3_job.svg`, `output/house_a3.gcode`, and `output/house_a3_manifest.json`: prepared job artefacts. The manifest stores every file path **relative to itself** (e.g. `../house_a3.svg`, `house_a3_job.svg`, `house_a3.gcode`) and records the input/job-svg/gcode SHA-256, the material profile, and a settings fingerprint. You can copy the whole `kraft-house/` tree anywhere and run `job preflight` on the copied manifest with no reference to this checkout. Regenerate them after any change to the SVG.
 
 Window frames are etched 1.5 mm outside each opening. The door sits left of centre with both front windows to its right, so no cut lines touch each other.
 
@@ -70,6 +70,12 @@ Handle the extra width one of two ways:
 - Or trim the sheet to 410 mm wide or less before cutting. Then it fits inside the travel with no overhang.
 
 Line up the machine origin with the start of the working window, not the sheet corner. Machine (0,0) maps to the design point (10, 8.5) on the sheet. Tape the corners lightly so the card stays flat.
+
+The regenerated manifest records the verified machine-coordinate envelope actually
+driven by the G-code: **X 19.99–391.998 mm** (≈372 mm of travel used), **Y
+116.002–384.988 mm** (≈269 mm), `in_bounds = true`, with the **+Y flip applied**
+(design space is top-left; the export maps it to the machine front-left origin).
+The 10 mm sheet overhang described above is the only fit issue.
 
 ## Assembly
 
