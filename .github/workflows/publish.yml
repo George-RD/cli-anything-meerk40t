@@ -40,10 +40,21 @@ jobs:
         run: |
           TAG="${GITHUB_REF_NAME}"   # e.g. "v1.4.0"
           PKG_VERSION="$(python - <<'PY'
-          import re, pathlib
-          txt = pathlib.Path('setup.py').read_text()
-          m = re.search(r'version\s*=\s*["\']([^"\']+)["\']', txt)
-          print(m.group(1))
+          import ast, pathlib, sys
+          src = pathlib.Path('setup.py').read_text()
+          tree = ast.parse(src)
+          # Collect EVERY version= kwarg from EVERY setup() call.
+          version_nodes = []
+          for node in ast.walk(tree):
+              if isinstance(node, ast.Call) and getattr(node.func, 'id', None) == 'setup':
+                  for kw in node.keywords:
+                      if kw.arg == 'version':
+                          version_nodes.append(kw.value)
+          if len(version_nodes) != 1:
+              raise SystemExit('setup.py must declare exactly one version= kwarg')
+          if not (isinstance(version_nodes[0], ast.Constant) and isinstance(version_nodes[0].value, str)):
+              raise SystemExit('setup.py version= must be a string literal')
+          print(version_nodes[0].value)
           PY
           )"
           echo "tag=${TAG} setup.py version=${PKG_VERSION}"

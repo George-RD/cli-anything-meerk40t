@@ -72,6 +72,10 @@ class ManifestMissingError(Exception):
     """The checksum manifest itself is absent from the distribution bundle."""
 
 
+class ManifestNameError(Exception):
+    """A manifest entry name is unsafe (path traversal or separator)."""
+
+
 def _is_distribution(name: str) -> bool:
     return name.endswith(DIST_SUFFIXES)
 
@@ -123,6 +127,10 @@ def _parse_manifest(manifest_path: Path) -> dict[str, str]:
         name = name.strip()
         if not name or not digest:
             raise RuntimeError(f"malformed manifest line in {manifest_path}: {line!r}")
+        # n5: reject unsafe entry names (path traversal or separators) before
+        # they can be treated as a distribution filename.
+        if "/" in name or "\\" in name or ".." in name or name != Path(name).name:
+            raise ManifestNameError(f"unsafe manifest entry name: {name!r}")
         expected[name] = digest
     return expected
 
@@ -143,22 +151,44 @@ def verify(dist_dir, manifest_name: str = MANIFEST_NAME) -> dict[str, str]:
     """
     dist_dir = Path(dist_dir)
     manifest_path = dist_dir / manifest_name
-    if not manifest_path.exists():
+    if not (manifest_path.is_file() and not manifest_path.is_symlink()):
         raise ManifestMissingError(
-            f"{manifest_name} not found in {dist_dir}; nothing to verify against"
+            f"{manifest_name} not found or is not a regular file in {dist_dir}"
         )
 
     expected = _parse_manifest(manifest_path)
-    # Every regular file in the bundle except the manifest must be accounted for.
-    actual_names = {
-        p.name for p in dist_dir.iterdir() if p.is_file() and p.name != manifest_name
-    }
+    # M1 (part a): an empty manifest is not a valid allowlist.
+    if not expected:
+        raise RuntimeError(
+            f"{manifest_name} is empty; expected at least one entry in {dist_dir}"
+        )
+
+    # m2: gather the real bundle contents, rejecting symlinks and non-files
+    # (a stray directory or symlink must not be trusted as a distribution).
+    actual_names: set[str] = set()
+    for p in dist_dir.iterdir():
+        if p.name == manifest_name:
+            continue
+        if p.is_symlink():
+            raise AllowlistMismatchError(missing=[], unexpected=[p.name])
+        if not p.is_file():
+            raise AllowlistMismatchError(missing=[], unexpected=[p.name])
+        actual_names.add(p.name)
 
     expected_names = set(expected)
     missing = sorted(expected_names - actual_names)
     unexpected = sorted(actual_names - expected_names)
     if missing or unexpected:
         raise AllowlistMismatchError(missing=missing, unexpected=unexpected)
+
+    # M1 (part b): the bundle must be exactly one wheel + one sdist.
+    wheels = [n for n in expected_names if n.endswith(".whl")]
+    sdists = [n for n in expected_names if n.endswith(".tar.gz")]
+    if len(wheels) != 1 or len(sdists) != 1:
+        raise RuntimeError(
+            f"expected exactly one wheel and one sdist in manifest; "
+            f"found {len(wheels)} wheel(s) and {len(sdists)} sdist(s)"
+        )
 
     for name in expected_names:
         if sha256_of(dist_dir / name) != expected[name]:

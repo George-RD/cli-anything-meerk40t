@@ -172,6 +172,66 @@ def test_manifest_missing_rejected(tmp_path):
     assert _snapshot(tmp_path) == before
 
 
+
+def test_empty_manifest_rejected(tmp_path):
+    _write_dist(tmp_path)
+    verify_dist.generate(tmp_path)
+    (tmp_path / "SHA256SUMS").write_text("", encoding="utf-8")  # empty manifest
+    before = _snapshot(tmp_path)
+    with pytest.raises(RuntimeError):
+        verify_dist.verify(tmp_path)
+    assert _snapshot(tmp_path) == before  # durable bytes unchanged
+
+
+def test_stray_dir_rejected(tmp_path):
+    _write_dist(tmp_path)
+    verify_dist.generate(tmp_path)
+    (tmp_path / "stray_subdir").mkdir()  # a directory inside the bundle
+    before = _snapshot(tmp_path)
+    with pytest.raises(verify_dist.AllowlistMismatchError) as exc:
+        verify_dist.verify(tmp_path)
+    assert "stray_subdir" in exc.value.unexpected
+    assert _snapshot(tmp_path) == before  # durable bytes unchanged
+
+
+def test_symlink_rejected(tmp_path):
+    _write_dist(tmp_path)
+    verify_dist.generate(tmp_path)
+    (tmp_path / "link.whl").symlink_to(tmp_path / WHEEL)  # symlink to a real dist
+    before = _snapshot(tmp_path)
+    with pytest.raises(verify_dist.AllowlistMismatchError) as exc:
+        verify_dist.verify(tmp_path)
+    assert "link.whl" in exc.value.unexpected
+    assert _snapshot(tmp_path) == before  # durable bytes unchanged
+
+
+def test_manifest_traversal_name_rejected(tmp_path):
+    _write_dist(tmp_path)
+    verify_dist.generate(tmp_path)
+    # Tamper the manifest with a path-traversal entry name.
+    (tmp_path / "SHA256SUMS").write_text(
+        f"{verify_dist.sha256_of(tmp_path / WHEEL)}  ../../escaped.whl\n",
+        encoding="utf-8",
+    )
+    before = _snapshot(tmp_path)
+    with pytest.raises(verify_dist.ManifestNameError):
+        verify_dist.verify(tmp_path)
+    assert _snapshot(tmp_path) == before  # durable bytes unchanged
+
+
+def test_manifest_backslash_name_rejected(tmp_path):
+    _write_dist(tmp_path)
+    verify_dist.generate(tmp_path)
+    # Tamper the manifest with a backslash entry name (non-POSIX separator).
+    (tmp_path / "SHA256SUMS").write_text(
+        f"{verify_dist.sha256_of(tmp_path / WHEEL)}  ..\\escaped.whl\n",
+        encoding="utf-8",
+    )
+    before = _snapshot(tmp_path)
+    with pytest.raises(verify_dist.ManifestNameError):
+        verify_dist.verify(tmp_path)
+    assert _snapshot(tmp_path) == before  # durable bytes unchanged
+
 # --------------------------------------------------------------------------- #
 # smoke: packaged resources                                                    #
 # --------------------------------------------------------------------------- #
