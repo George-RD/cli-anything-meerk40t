@@ -47,6 +47,7 @@ setup(
     },
     package_data={
         "cli_anything.meerk40t": ["skills/*.md", "skills/references/*.md", "README.md", "profiles/*.json", "materials/*.json"],
+        "cli_anything.meerk40t.tests": ["*.svg"],
     },
     include_package_data=True,
     classifiers=[
