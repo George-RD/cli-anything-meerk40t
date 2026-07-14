@@ -24,53 +24,73 @@ MeerK40t and all headless dependencies are installed automatically.
 
 ## Quick start
 
+### Unattended quick start (no hardware, safe offline)
+
+Every command here runs from any directory against an installed wheel, with no
+source checkout and no laser connected. Use it to build, export, and verify a job.
+
 ```bash
-# 1. Detect the machine and read the port
+# 1. List materials and machine profiles (offline)
+cli-anything-meerk40t --machine sculpfun-s9 materials list
+
+# 2. Build a job from a rectangle (offline; --project is a root option, before the subcommand)
+cli-anything-meerk40t --json --project /tmp/job.svg elements rect 2in 2in 1in 1in --stroke red --fill none
+
+# 3. Resolve settings from the material, write job SVG + G-code + manifest
+cli-anything-meerk40t --json --machine sculpfun-s9 job prepare /tmp/job.svg \
+  --out-dir /tmp/j --material kraft-350gsm --allow-estimated
+# exits 2 if a role is estimated and --allow-estimated is omitted.
+# --allow-estimated uses ESTIMATED material settings for OFFLINE inspection/
+# preflight only — the emitted artifacts are NOT burn-ready. To actually cut,
+# run a calibration ladder on scrap, record it with `materials record`, then
+# re-run `job prepare` WITHOUT --allow-estimated so calibrated settings are used.
+
+# 4. Preflight: re-check file hashes and settings fingerprint (offline)
+cli-anything-meerk40t job preflight /tmp/j/job_manifest.json --allow-estimated
+```
+
+`job prepare` emits the G-code and manifest for **offline inspection and preflight**.
+With `--allow-estimated` the settings are estimated from the material profile, not
+calibrated, so these artifacts are **not burn-ready**. Before framing or burning,
+run a calibration ladder on scrap, record it with `materials record`, and re-run
+`job prepare` without `--allow-estimated` to use the calibrated settings. It prints
+a placement summary — the bounding box, the bed origin, and the Y-flip applied —
+so check it before burning.
+`--json` and `--machine` are root options, passed before the subcommand. The bundled
+`examples/kraft-house/` tree is a worked example: copy it anywhere and run
+`job preflight` on its manifest with no reference to this checkout. Hand-tuning
+power/speed per operation and raw `export gcode` are covered in the skill's
+[references/commands.md](skills/cli-anything-meerk40t/references/commands.md);
+they need a connected GRBL device to burn and are outside this unattended set.
+
+### Manual hardware smoke (operator present)
+
+These steps need a real laser and the operator wearing rated glasses. They are
+excluded from the unattended set above. Only frame or burn a job prepared from
+**calibrated** settings — re-run `job prepare` without `--allow-estimated` after a
+scrap calibration ladder and `materials record`; the `--allow-estimated` artifacts
+from the unattended set are for inspection and preflight only.
+
+```bash
+# Detect the machine and read the port (opens each candidate port)
 cli-anything-meerk40t device detect --probe
 
-# 2. Preflight the GRBL device against the Sculpfun S9 profile
+# Preflight the GRBL device against the Sculpfun S9 profile
 cli-anything-meerk40t --machine sculpfun-s9 --port /dev/cu.usbserial-10 device check
 
-# 3. Build the job: add a rectangle, classify it, set power and speed
-cli-anything-meerk40t --json project new --project /tmp/job.svg
-cli-anything-meerk40t --json --project /tmp/job.svg elements rect 80mm 50mm 10mm 10mm
-cli-anything-meerk40t --json --project /tmp/job.svg operations classify
-cli-anything-meerk40t --json --project /tmp/job.svg operations set 0 power 150
-cli-anything-meerk40t --json --project /tmp/job.svg operations set 0 speed 25
-
-# 4. Frame the placement. OPERATOR MUST BE PRESENT: the beam is live once connected.
+# Frame the placement. OPERATOR MUST BE PRESENT: the beam is live once connected.
 cli-anything-meerk40t --machine sculpfun-s9 --port /dev/cu.usbserial-10 device frame 10 10 80 50 --feed 1500
-
-# 5. Export G-code. Burning needs the operator present; read the skill's references/hardware.md first.
-cli-anything-meerk40t --device grbl --machine sculpfun-s9 --project /tmp/job.svg export gcode /tmp/job.gcode
 ```
 
-The export prints a placement summary: the bounding box, the bed origin, and the Y-flip applied. Check it before the operator runs the job.
+Then `device connect`, `device jog`/`goto` to verify movement, and burn via the
+console passthrough. See the skill's
+[references/hardware.md](skills/cli-anything-meerk40t/references/hardware.md)
+for the full GRBL bring-up, origin discipline, and failure diagnosis.
 
-## Prepare and stage a material-driven job
-
-Settings come from a material profile, not hand-typed per job. Build the
-artefacts, re-verify them, then stage them on a running GUI kernel:
-
-```bash
-# 1. Prepare: resolve settings from the material, write job SVG + G-code + manifest
-cli-anything-meerk40t --json --machine sculpfun-s9 job prepare design.svg \
-  --out-dir /tmp/j --material kraft-350gsm
-# exits 2 if any role is estimated; add --allow-estimated to acknowledge
-
-# 2. Preflight: re-check file hashes and settings fingerprint before staging
-cli-anything-meerk40t job preflight /tmp/j/design_manifest.json --allow-estimated
-
-# 3. Stage: verify the manifest, then load the job SVG on the live GUI kernel
-cli-anything-meerk40t attach --port 2323 stage /tmp/j/design_job.svg \
-  /tmp/j/design_manifest.json --allow-estimated
-```
-
-`--json` and `--machine` are root options, passed before the subcommand.
-The operator still runs the GRBL bring-up (origin, focus, glasses,
-ventilation) and presses Start on the GUI. See the skill's
-[references/materials.md](skills/cli-anything-meerk40t/references/materials.md)
-for calibration.
+Staging a prepared job onto a running GUI uses `attach stage` (see
+[references/gui-operation.md](skills/cli-anything-meerk40t/references/gui-operation.md));
+the consoleserver it talks to is **unauthenticated** — keep it on loopback and
+firewall-restrict it (details in that reference).
 
 ## What it does
 
@@ -79,7 +99,7 @@ agent-driven laser job preparation. It exposes project, elements, operations,
 device, export, session, and console-passthrough commands with `--json` output
 for AI agents.
 
-Two skills ship with this harness:
+One skill ships with this harness:
 
 - [`cli-anything-meerk40t`](skills/cli-anything-meerk40t/SKILL.md): the single
   skill, structured as a router. Its [references](skills/cli-anything-meerk40t/references/)
@@ -153,7 +173,7 @@ and failure diagnosis live in the skill's
 
 ## Status
 
-v1.4.0. 109 unit tests and 13 E2E tests pass, 100% pass rate.
+v1.4.0. The test suite passes on a clean `meerk40t==0.9.9100` install; see [cli_anything/meerk40t/tests/TEST.md](cli_anything/meerk40t/tests/TEST.md) for the gate and the exact command.
 
 Live-verified against a Sculpfun S9 (GRBL 1.1h, CH340) on macOS.
 

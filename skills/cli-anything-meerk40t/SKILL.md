@@ -146,7 +146,9 @@ check. Prefer the verified path; use the raw console only as a fallback.
   method, the power-ladder first test, field-verified data points.
 - [references/gui-operation.md](references/gui-operation.md) - remote GUI
   operation over the console server: bridge-plugin gate, connection-first
-  order, staging jobs the operator starts, telnet quirks.
+  order, staging jobs the operator starts, telnet quirks. **The consoleserver
+  is unauthenticated — keep it on loopback and firewall-restrict it (see that
+  reference).**
 
 The CLI is the default, fully supported path. Remote GUI operation needs the
 bundled bridge plugin (it back-fills upstream meerk40t#3249 fixes on stock

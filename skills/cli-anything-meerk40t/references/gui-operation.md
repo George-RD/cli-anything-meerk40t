@@ -7,6 +7,28 @@ the default path and does not need the GUI at all.*
 Driving a running MeerK40t GUI over its telnet console server lets the
 operator watch on canvas while an agent stages the job. Different failure
 modes from the CLI; every gate here exists because it caught a real fault.
+## Security boundary (read first)
+
+The MeerK40t consoleserver is **UNAUTHENTICATED**: it has no password, token,
+or access control of any kind. Treat it as a local-only control socket:
+
+- **Keep it on loopback.** Verify the listener (`lsof -iTCP:2323 -sTCP:LISTEN`
+  or `ss -ltnp`) and confirm it is bound to `127.0.0.1` / `::1`, **not** a
+  wildcard (`0.0.0.0` or `::`). The consoleserver has no built-in
+  authentication, so if the bind is a wildcard — or you cannot confirm
+  otherwise — firewall the port so only the operator's own machine can reach
+  it. Never port-forward or reverse-tunnel the port to the internet.
+- **Firewall-restrict it.** Only the operator's own machine should be able to
+  reach the port. Put it behind a firewall if anything else shares the host.
+- **Correlation is not authentication.** `attach stage` matches each staging
+  request to its reply with a correlation ID. That pairing does **NOT**
+  authenticate either end and does **NOT** make the channel safe to expose to
+  the internet — it only keeps an already-trusted local link from crossing
+  wires. If the port is reachable by an untrusted party, they can drive the
+  laser.
+
+This harness does nothing to add authentication; the safety rests entirely on
+the network boundary.
 
 ## Bridge plugin gate
 

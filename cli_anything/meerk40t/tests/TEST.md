@@ -99,7 +99,7 @@ backend boot defaults.
   undo/redo move commands through the history stacks.
 ## Coverage snapshot
 
-340 tests pass on a **clean** `meerk40t==0.9.9100` install (`CLI_ANYTHING_FORCE_INSTALLED=1`, run from a neutral cwd with `PYTHONPATH` unset — see the Clean-install invariant above). The dev (editable) install passes the same gate; one test, `TestIssue31Phase1.test_concurrent_stage_clients_correlated`, is concurrency/network-sensitive and may intermittently fail on the dev install only — it is unrelated to #51 and green on the clean install:
+The full suite passes on a **clean** `meerk40t==0.9.9100` install (`CLI_ANYTHING_FORCE_INSTALLED=1`, run from a neutral cwd with `PYTHONPATH` unset — see the Clean-install invariant above). The dev (editable) install passes the same gate; one test, `TestIssue31Phase1.test_concurrent_stage_clients_correlated`, is concurrency/network-sensitive and may intermittently fail on the dev install only — it is unrelated to #51 and green on the clean install:
 ```bash
 CLI_ANYTHING_FORCE_INSTALLED=1 \
   .venv/bin/python -m unittest \
