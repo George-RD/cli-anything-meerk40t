@@ -83,6 +83,7 @@ def encode_request(
     request_id: str,
     manifest: bytes | None = None,
     svg: bytes | None = None,
+    version: int = PROTOCOL_VERSION,
 ) -> str:
     """Build the single base64 request token for ``cmd``.
 
@@ -95,7 +96,7 @@ def encode_request(
     if not isinstance(request_id, str) or not request_id:
         raise AttachEnvelopeError("request_id must be a non-empty string")
     obj = {
-        "v": PROTOCOL_VERSION,
+        "v": version,
         "request_id": request_id,
         "cmd": cmd,
         "manifest_b64": _b64_encode(manifest),
