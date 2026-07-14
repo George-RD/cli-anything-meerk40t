@@ -1849,10 +1849,10 @@ class TestSkillPackaging(unittest.TestCase):
 
 from cli_anything.meerk40t.utils import materials as materials_mod
 from cli_anything.meerk40t.utils import job_prep as job_prep_mod
+from cli_anything.meerk40t.utils.attach_envelope import decode_request, format_reply, FRAME_PREFIX
 from cli_anything.meerk40t.utils.attach_client import (
     send as attach_send,
     AttachError,
-    FRAME_PREFIX,
 )
 import socketserver
 import threading
@@ -2236,14 +2236,30 @@ _attach_script: list[str] = []
 
 class _AttachHandler(socketserver.StreamRequestHandler):
     def handle(self):
-        # Wait for the client's command line so any pre-frame noise the client
-        # drains does not shadow the framed reply.
+        # Wait for the client's request line, then decode it to recover the
+        # correlation id so replies can echo request_id + v.
         try:
-            self.rfile.readline()
+            line = self.rfile.readline()
         except OSError:
             return
-        for line in _attach_script:
-            self.wfile.write((line + "\n").encode("utf-8"))
+        request_id = None
+        try:
+            raw = line.decode("utf-8", errors="replace").strip()
+            # The real client sends `agent <token>`; the mock must accept the
+            # same wire form and decode only the envelope token.
+            if raw.startswith("agent "):
+                raw = raw[len("agent ") :]
+            request_id = decode_request(raw).get("request_id")
+        except Exception:
+            request_id = None
+        for item in _attach_script:
+            if isinstance(item, str):
+                self.wfile.write((item + "\n").encode("utf-8"))
+            elif isinstance(item, tuple):
+                rid_override, payload = item
+                self.wfile.write((format_reply(rid_override, **payload) + "\n").encode("utf-8"))
+            else:
+                self.wfile.write((format_reply(request_id, **item) + "\n").encode("utf-8"))
         self.wfile.flush()
 
 
@@ -2274,23 +2290,36 @@ class TestAttachClientFrame(unittest.TestCase):
         return port
 
     def test_valid_frame_parses(self):
-        payload = json.dumps({"protocol": 1, "devices": ["sculpfun-s9"]})
-        port = self._serve([FRAME_PREFIX + payload])
-        reply = attach_send("127.0.0.1", port, "agent status", timeout=2.0)
-        self.assertEqual(reply, {"protocol": 1, "devices": ["sculpfun-s9"]})
+        port = self._serve([{"protocol": 1, "devices": ["sculpfun-s9"]}])
+        reply = attach_send("127.0.0.1", port, "status", timeout=2.0)
+        self.assertEqual(reply["devices"], ["sculpfun-s9"])
+        self.assertEqual(reply["protocol"], 1)
+        self.assertTrue(reply["request_id"])
+        self.assertEqual(reply["v"], 1)
 
     def test_prose_only_raises_attacherror(self):
         port = self._serve(["kernel banner line", "warning: warming up"])
         with self.assertRaises(AttachError):
-            attach_send("127.0.0.1", port, "agent status", timeout=1.0)
+            attach_send("127.0.0.1", port, "status", timeout=1.0)
 
     def test_interleaved_noise_then_frame_parses(self):
-        payload = json.dumps({"protocol": 1, "elements": 3})
         port = self._serve(
-            ["noisy startup log", "info: channel open", FRAME_PREFIX + payload]
+            ["noisy startup log", "info: channel open", {"protocol": 1, "elements": 3}]
         )
-        reply = attach_send("127.0.0.1", port, "agent status", timeout=2.0)
-        self.assertEqual(reply, {"protocol": 1, "elements": 3})
+        reply = attach_send("127.0.0.1", port, "status", timeout=2.0)
+        self.assertEqual(reply["elements"], 3)
+        self.assertTrue(reply["request_id"])
+        self.assertEqual(reply["v"], 1)
+
+    def test_stale_frame_skipped_returns_correlated(self):
+        stale_rid = "0" * 32
+        port = self._serve(
+            [(stale_rid, {"stale": True, "elements": 99}), {"real": True, "elements": 3}]
+        )
+        reply = attach_send("127.0.0.1", port, "status", timeout=2.0)
+        self.assertIs(reply.get("real"), True)
+        self.assertNotIn("stale", reply)
+        self.assertNotEqual(reply["request_id"], stale_rid)
 
 class TestStageFileScene(unittest.TestCase):
     """`mk_control._stage_file` against a real backend: load, replace, refuse.
@@ -2343,7 +2372,11 @@ class TestStageFileScene(unittest.TestCase):
         return self._b64.b64encode(os.path.abspath(path).encode("utf-8")).decode("ascii")
 
     def _stage(self, path, sha):
-        return self._mkc._stage_file(self.backend.kernel, self._b64path(path), expected_sha=sha)
+        with open(path, "rb") as fh:
+            svg_bytes = fh.read()
+        manifest = {"files": {"job_svg": {"sha256": sha}}}
+        manifest_bytes = json.dumps(manifest).encode("utf-8")
+        return self._mkc._stage_file(self.backend.kernel, svg_bytes, manifest_bytes)
 
     def test_stage_loads_job(self):
         job = self._make_job()

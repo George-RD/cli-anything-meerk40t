@@ -7,7 +7,6 @@ import functools
 import hashlib
 import json
 import os
-import base64
 import sys
 from pathlib import Path
 from typing import Any
@@ -2067,10 +2066,13 @@ def attach(ctx, host, port):
     ctx.obj["attach_port"] = port
 
 
-def _attach_send(ctx, command):
-    """Send a framed command, mapping any failure to a no-frame-style error dict."""
+def _attach_send(ctx, cmd, manifest=None, svg=None):
+    """Send a versioned, request-correlated envelope, mapping failures to a no-frame-style error dict."""
     try:
-        return None, attach_client_mod.send(ctx.obj["attach_host"], ctx.obj["attach_port"], command)
+        return None, attach_client_mod.send(
+            ctx.obj["attach_host"], ctx.obj["attach_port"], cmd,
+            manifest=manifest, svg=svg,
+        )
     except attach_client_mod.AttachError as exc:
         return {"error": str(exc)}, None
     except OSError as exc:
@@ -2087,7 +2089,7 @@ def _attach_send(ctx, command):
 @click.pass_context
 def attach_status(ctx):
     """Query the live kernel: devices, bed, element/op counts, spooler."""
-    err, reply = _attach_send(ctx, "agent status")
+    err, reply = _attach_send(ctx, "status")
     if err is not None:
         _emit(ctx, err)
         sys.stdout = _REAL_STDOUT
@@ -2159,15 +2161,14 @@ def attach_stage(ctx, job_svg, manifest, allow_estimated):
         sys.stdout = _REAL_STDOUT
         ctx.exit(code)
 
-    # Stage over the control channel. The recorded sha256 of the job SVG and a
-    # base64-encoded absolute path are two whitespace-free tokens, so a path
-    # containing spaces survives intact and the kernel re-verifies the staged
-    # bytes against the recorded hash before touching the scene.
-    files = manifest_data.get("files", {})
-    job_svg_entry = files.get("job_svg", {}) or {}
-    expected_sha = job_svg_entry.get("sha256")
-    b64_path = base64.b64encode(job_svg_abs.encode("utf-8")).decode("ascii")
-    err, stage_reply = _attach_send(ctx, f"agent stage {expected_sha} {b64_path}")
+    # Stage over the control channel. The CLI reads the job SVG and manifest
+    # bytes and sends them inside the versioned envelope; the receiver loads
+    # from the received bytes (never from a filesystem path) and re-verifies
+    # the sha256 before touching the scene.
+    with open(job_svg_abs, "rb") as fh:
+        svg_bytes = fh.read()
+    manifest_bytes = mpath.read_bytes()
+    err, stage_reply = _attach_send(ctx, "stage", manifest=manifest_bytes, svg=svg_bytes)
     if err is not None:
         _emit(ctx, err)
         sys.stdout = _REAL_STDOUT

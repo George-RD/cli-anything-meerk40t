@@ -4,24 +4,30 @@ Exposes a framed, single-line JSON protocol on the console channel so the
 CLI attach client can drive a running MeerK40t GUI/kernel headlessly without
 parsing prose or relying on command ordering.
 
-Commands registered:
-  agent status
-  agent stage <expected_sha256> <base64-path>
+Commands carried by the versioned envelope (see ``attach_envelope``):
+  status       - device/bed/element/op status; the reply echoes the request's
+                 ``request_id`` and ``v``.
+  stage        - load the job SVG carried inside the envelope bytes, after a
+                 sha256 integrity check against the manifest. The receiver
+                 never receives, reads, or interpolates a filesystem path.
 
-Every reply is one line::
-
-    #CLIA1# {"key": ...}
+Requests arrive as a single base64 envelope token; every reply is one
+``#CLIA1#`` frame that echoes the request's ``request_id`` and ``v``.
 """
 
 from __future__ import annotations
 
 import json
 import os
-import base64
 import hashlib
+import tempfile
 from cli_anything.meerk40t.utils import serial_probe
-
-FRAME_PREFIX = "#CLIA1# "
+from cli_anything.meerk40t.utils.attach_envelope import (
+    PROTOCOL_VERSION,
+    decode_request,
+    format_reply,
+    AttachEnvelopeError,
+)
 
 
 def register(kernel):
@@ -38,38 +44,36 @@ def register(kernel):
 def _register_agent_command(kernel):
     def _agent_command(channel, _, args=tuple(), **kwargs):
         if not args:
-            _reply(
-                channel,
-                {
-                    "error": "usage: agent status | agent stage <expected_sha256> <base64-path>",
-                },
+            channel(format_reply(None, error="usage: agent <envelope-token>"))
+            return
+        try:
+            req = decode_request(args[0])
+        except AttachEnvelopeError as exc:
+            channel(format_reply(None, error=str(exc)))
+            return
+        request_id = req.get("request_id")
+        cmd = req.get("cmd")
+        if req.get("v") != PROTOCOL_VERSION:
+            channel(
+                format_reply(
+                    request_id,
+                    error=(
+                        f"unsupported protocol version {req.get('v')} "
+                        f"— expected {PROTOCOL_VERSION}"
+                    ),
+                )
             )
             return
-
-        subcommand = args[0]
-        if subcommand == "status":
-            _reply(channel, _build_status(kernel))
-        elif subcommand == "stage":
-            if len(args) < 3:
-                _reply(
-                    channel,
-                    {
-                        "error": "agent stage requires <expected_sha256> <base64-path>",
-                    },
-                )
-                return
+        if cmd == "status":
+            channel(format_reply(request_id, **_build_status(kernel)))
+        elif cmd == "stage":
             try:
-                payload = _stage_file(kernel, args[2], expected_sha=args[1])
+                payload = _stage_file(kernel, req.get("svg"), req.get("manifest"))
             except Exception as exc:  # noqa: BLE001
                 payload = {"error": str(exc)}
-            _reply(channel, payload)
+            channel(format_reply(request_id, **payload))
         else:
-            _reply(
-                channel,
-                {
-                    "error": f"unknown agent subcommand: {subcommand!r}",
-                },
-            )
+            channel(format_reply(request_id, error=f"unknown envelope command: {cmd!r}"))
 
     kernel.console_command(
         "agent",
@@ -77,8 +81,6 @@ def _register_agent_command(kernel):
     )(_agent_command)
 
 
-def _reply(channel, payload):
-    channel(FRAME_PREFIX + json.dumps(payload, separators=(",", ":")))
 
 
 def _build_status(kernel):
@@ -152,42 +154,58 @@ def _build_status(kernel):
         "spooler_queue": spooler_queue,
     }
 
-def _sha256_file(path: str) -> str | None:
-    """Return the sha256 hex digest of a file, or None if it cannot be read."""
-    h = hashlib.sha256()
+
+
+def _stage_file(kernel, svg_bytes, manifest_bytes):
+    # The CLI sends the job SVG and manifest as raw envelope bytes; the receiver
+    # never receives, reads, or interpolates a filesystem path. Integrity is
+    # verified against the manifest's recorded sha256 before the scene is touched.
+    if not svg_bytes:
+        raise ValueError("stage envelope missing svg bytes")
+    if not manifest_bytes:
+        raise ValueError("stage envelope missing manifest bytes")
+
     try:
-        with open(path, "rb") as fh:
-            for chunk in iter(lambda: fh.read(8192), b""):
-                h.update(chunk)
-    except OSError:
-        return None
-    return h.hexdigest()
-
-
-def _stage_file(kernel, b64_path, expected_sha=None):
-    # The CLI sends a base64-encoded absolute path as a single whitespace-free
-    # token so paths containing spaces survive intact over the console channel.
-    try:
-        raw = base64.b64decode(b64_path, validate=True)
-        path = os.path.abspath(os.path.expanduser(raw.decode("utf-8")))
-    except Exception as exc:
-        raise ValueError(f"invalid staged path encoding: {exc}")
-    if not os.path.exists(path):
-        raise FileNotFoundError(f"no such file: {path!r}")
-
-    # Verify integrity IMMEDIATELY, before touching the scene, so a path whose
-    # bytes differ from the recorded hash cannot silently mis-stage. On mismatch
-    # we return an error frame and leave the scene untouched.
-    actual_sha = _sha256_file(path)
-    if actual_sha is None:
-        raise RuntimeError(f"cannot read staged file: {path!r}")
-    if expected_sha is not None and actual_sha != expected_sha:
+        manifest = json.loads(manifest_bytes.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ValueError(f"invalid manifest payload: {exc}")
+    expected_sha = manifest.get("files", {}).get("job_svg", {}).get("sha256")
+    if expected_sha is None:
         return {
             "error": (
-                f"staged file hash {actual_sha} does not match expected "
+                "manifest missing files.job_svg.sha256 - refusing to load "
+                "unverified scene"
+            )
+        }
+
+    actual_sha = hashlib.sha256(svg_bytes).hexdigest()
+    if actual_sha != expected_sha:
+        return {
+            "error": (
+                f"staged svg hash {actual_sha} does not match manifest "
                 f"{expected_sha} - refusing to load scene"
             )
         }
+
+    # Write the received bytes to a receiver-owned temp file, then load from it.
+    fd, temp_path = tempfile.mkstemp(suffix=".svg", prefix="mk_stage_")
+    try:
+        with os.fdopen(fd, "wb") as fh:
+            fh.write(svg_bytes)
+    except Exception:
+        try:
+            os.unlink(temp_path)
+        except OSError:
+            pass
+        raise
+
+    elements = getattr(kernel, "elements", None)
+    if elements is None:
+        try:
+            os.unlink(temp_path)
+        except OSError:
+            pass
+        raise RuntimeError("elements service is not available")
 
     # Replace the scene with exactly the staged job. The meerk40t console
     # `load` command APPENDS a project's operations and elements, so without
@@ -199,59 +217,66 @@ def _stage_file(kernel, b64_path, expected_sha=None):
     # load is safe (the loader keeps working), so we snapshot the pre-existing
     # nodes, load the job, then remove exactly that snapshot - leaving only the
     # freshly staged job's operations and elements.
-    elements = getattr(kernel, "elements", None)
-    if elements is None:
-        raise RuntimeError("elements service is not available")
-    pre_existing = list(elements.ops()) + list(elements.elems())
-
-    kernel.console(f"load {path}\n")
-
-    # Strip only the nodes that pre-dated this load and still remain: where
-    # `load` appends, this removes the previous job; where `load` already
-    # replaces the scene, the old nodes are gone and nothing is stripped.
-    # Either way the scene ends as exactly the staged job. pre_existing holds
-    # live references, so the identities stay stable for the comparison.
-    current_ids = {id(n) for n in list(elements.ops()) + list(elements.elems())}
-    for node in pre_existing:
-        if id(node) not in current_ids:
-            continue
-        try:
-            node.remove_node()
-        except Exception:
-            try:
-                node.remove()
-            except Exception:
-                pass
-
-    elem_count = 0
     try:
-        elem_count = len(list(elements.elems()))
-    except Exception:
-        pass
+        pre_existing = list(elements.ops()) + list(elements.elems())
 
-    ops_summary = []
-    for op in elements.ops():
-        op_type = getattr(op, "type", "") or ""
-        kind = op_type.split()[-1] if op_type else "unknown"
-        power = getattr(op, "power", None)
-        speed = getattr(op, "speed", None)
-        passes = getattr(op, "passes", None)
+        kernel.console(f"load {temp_path}\n")
+
+        # Strip only the nodes that pre-dated this load and still remain: where
+        # `load` appends, this removes the previous job; where `load` already
+        # replaces the scene, the old nodes are gone and nothing is stripped.
+        # Either way the scene ends as exactly the staged job. pre_existing holds
+        # live references, so the identities stay stable for the comparison.
+        current_ids = {id(n) for n in list(elements.ops()) + list(elements.elems())}
+        for node in pre_existing:
+            if id(node) not in current_ids:
+                continue
+            try:
+                node.remove_node()
+            except Exception:
+                try:
+                    node.remove()
+                except Exception:
+                    pass
+
+        elem_count = 0
         try:
-            op_elems = len(getattr(op, "children", []))
+            elem_count = len(list(elements.elems()))
         except Exception:
-            op_elems = 0
-        ops_summary.append(
-            {
-                "kind": kind,
-                "power": power,
-                "speed": speed,
-                "passes": passes,
-                "elements": op_elems,
-            }
-        )
+            pass
 
-    return {
-        "loaded": path,
-        "elements": elem_count,
-        "operations": ops_summary,
-    }
+        ops_summary = []
+        for op in elements.ops():
+            op_type = getattr(op, "type", "") or ""
+            kind = op_type.split()[-1] if op_type else "unknown"
+            power = getattr(op, "power", None)
+            speed = getattr(op, "speed", None)
+            passes = getattr(op, "passes", None)
+            try:
+                op_elems = len(getattr(op, "children", []))
+            except Exception:
+                op_elems = 0
+            ops_summary.append(
+                {
+                    "kind": kind,
+                    "power": power,
+                    "speed": speed,
+                    "passes": passes,
+                    "elements": op_elems,
+                }
+            )
+
+        result = {
+            "loaded": temp_path,
+            "elements": elem_count,
+            "operations": ops_summary,
+        }
+    finally:
+        # The console `load` is synchronous, so the scene is fully loaded before
+        # we remove the receiver-owned temp file here.
+        try:
+            os.unlink(temp_path)
+        except OSError:
+            pass
+
+    return result

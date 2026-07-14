@@ -6,7 +6,13 @@ import json
 import socket
 import time
 
-FRAME_PREFIX = "#CLIA1# "
+from cli_anything.meerk40t.utils.attach_envelope import (
+    new_request_id,
+    encode_request,
+    reply_matches,
+    FRAME_PREFIX,
+    AttachEnvelopeError,
+)
 
 
 class AttachError(Exception):
@@ -26,13 +32,20 @@ def _remaining_timeout(deadline: float | None) -> float | None:
     return remaining
 
 
-def send(host: str, port: int, command: str, timeout: float = 5.0) -> dict:
-    """Send a command to the consoleserver and return the first #CLIA1# JSON frame.
+def send(host: str, port: int, cmd: str, manifest=None, svg=None, timeout: float = 5.0) -> dict:
+    """Send a versioned, request-correlated envelope and return the matching #CLIA1# frame.
 
-    Pending bytes are drained before the command is sent so that stale output from
-    previous commands does not shadow the reply.
+    A fresh ``request_id`` is minted per call; the reply frame must echo it
+    (via :func:`reply_matches`) or it is skipped as stale/foreign output. Stale
+    bytes are drained before the command is sent so previous commands' output
+    does not shadow this reply.
     """
     deadline = time.monotonic() + timeout if timeout is not None else None
+    request_id = new_request_id()
+    try:
+        token = encode_request(cmd=cmd, request_id=request_id, manifest=manifest, svg=svg)
+    except AttachEnvelopeError as exc:
+        raise AttachError(f"failed to build attach request: {exc}") from exc
 
     sock = socket.create_connection(
         (host, port), timeout=_remaining_timeout(deadline)
@@ -52,9 +65,18 @@ def send(host: str, port: int, command: str, timeout: float = 5.0) -> dict:
                 if not chunk:
                     break
         finally:
-            sock.settimeout(_remaining_timeout(deadline))
+            try:
+                sock.settimeout(_remaining_timeout(deadline))
+            except OSError:
+                raise AttachError(
+                    "attach request timed out before reply"
+                ) from None
 
-        sock.sendall((command + "\n").encode("utf-8"))
+        # The envelope is delivered as the single argument to the `agent`
+        # consoleserver command (the command name is the protocol boundary;
+        # the envelope token is the argument). This replaces the legacy
+        # `agent status` / `agent stage <sha> <b64>` literal-subcommand format.
+        sock.sendall((f"agent {token}" + "\n").encode("utf-8"))
 
         buffer = b""
         while True:
@@ -72,16 +94,16 @@ def send(host: str, port: int, command: str, timeout: float = 5.0) -> dict:
                 # whitespace; the frame sentinel is still the line prefix once
                 # that decoration is stripped.
                 stripped = line.lstrip()
-                if stripped.startswith(FRAME_PREFIX):
-                    payload = stripped[len(FRAME_PREFIX) :]
-                    try:
-                        return json.loads(payload)
-                    except json.JSONDecodeError as exc:
-                        tail = payload + "\n" + buffer.decode("utf-8", errors="replace")
-                        raise AttachError(
-                            "no #CLIA1# frame received - is the GUI running with the cli-anything extension?",
-                            raw_tail=tail,
-                        ) from exc
+                if not stripped.startswith(FRAME_PREFIX):
+                    continue
+                payload = stripped[len(FRAME_PREFIX) :]
+                try:
+                    frame = json.loads(payload)
+                except json.JSONDecodeError:
+                    # Skip unparseable frames; keep scanning for our reply.
+                    continue
+                if reply_matches(frame, request_id=request_id):
+                    return frame
 
         tail = buffer.decode("utf-8", errors="replace")
         raise AttachError(

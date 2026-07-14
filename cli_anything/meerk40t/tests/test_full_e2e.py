@@ -17,10 +17,11 @@ import unittest
 import xml.etree.ElementTree as ET
 import glob
 import re as _re
-import base64
+import hashlib
 
 from cli_anything.meerk40t.utils import attach_client as attach_client_test
 import socket
+from cli_anything.meerk40t.utils.attach_envelope import encode_request, FRAME_PREFIX
 
 from cli_anything.meerk40t.core import elements
 from cli_anything.meerk40t.core import export
@@ -788,7 +789,7 @@ class TestPR24Findings(TestAttachRoundTrip):
              "stage", "--allow-estimated", self.job_svg, self.manifest]
         )
         self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
-        before = attach_client_test.send("localhost", self.port, "agent status")
+        before = attach_client_test.send("localhost", self.port, "status")
         # The partial kernel may not load ops; capture whatever count it reports
         # so the mismatch below can prove the scene is unchanged.
 
@@ -801,20 +802,18 @@ class TestPR24Findings(TestAttachRoundTrip):
 
         with open(self.manifest, "r", encoding="utf-8") as fh:
             manifest = json.load(fh)
-        expected_sha = manifest["files"]["job_svg"]["sha256"]
-        b64 = base64.b64encode(
-            str(Path(modified).resolve()).encode("utf-8")
-        ).decode("ascii")
+        svg_bytes = open(modified, "rb").read()
+        manifest_bytes = open(self.manifest, "rb").read()
 
         # The kernel must refuse to load and return an error frame.
         reply = attach_client_test.send(
-            "localhost", self.port, f"agent stage {expected_sha} {b64}"
+            "localhost", self.port, "stage", manifest=manifest_bytes, svg=svg_bytes
         )
         self.assertIn("error", reply, msg=f"expected error frame, got {reply}")
         self.assertIn("hash", reply["error"].lower())
 
         # The scene must be unchanged: operation count identical to before.
-        after = attach_client_test.send("localhost", self.port, "agent status")
+        after = attach_client_test.send("localhost", self.port, "status")
         self.assertEqual(after["operations"], before["operations"])
 
         # CLI side: a manifest whose recorded job_svg sha is wrong is refused
@@ -908,5 +907,109 @@ class TestIssue29AtomicMaterials(TestCLISubprocess):
             self._restore_config_home(prev)
         self.assertEqual(shown["name"], "rt-e2e")
         self.assertEqual(shown["description"], "round trip")
+
+class TestIssue31Phase1(TestAttachRoundTrip):
+    """Issue #31 Phase 1: versioned, request-correlated wire envelope (live kernel)."""
+
+    @staticmethod
+    def _read_frame(sock, timeout=2.0):
+        """Read from ``sock`` until a #CLIA1# frame line; return the parsed dict or None on timeout."""
+        sock.settimeout(timeout)
+        buffer = b""
+        while True:
+            try:
+                chunk = sock.recv(4096)
+            except socket.timeout:
+                return None
+            if not chunk:
+                return None
+            buffer += chunk
+            while b"\n" in buffer:
+                line, _, buffer = buffer.partition(b"\n")
+                line = line.decode("utf-8", errors="replace").lstrip()
+                if not line.startswith(FRAME_PREFIX):
+                    continue
+                payload = line[len(FRAME_PREFIX):]
+                try:
+                    return json.loads(payload)
+                except json.JSONDecodeError:
+                    continue
+
+    def test_status_reply_echoes_request_id(self):
+        reply = attach_client_test.send("localhost", self.port, "status")
+        self.assertIsInstance(reply, dict)
+        self.assertIn("request_id", reply)
+        self.assertTrue(reply["request_id"])
+        self.assertEqual(reply["v"], 1)
+        self.assertEqual(reply["protocol"], 1)
+
+    def test_version_mismatch_rejected_with_request_id(self):
+        token = encode_request(version=99, cmd="status", request_id="a" * 32)
+        sock = socket.create_connection(("localhost", self.port), timeout=5.0)
+        try:
+            sock.sendall((f"agent {token}" + "\n").encode("utf-8"))
+            frame = self._read_frame(sock)
+        finally:
+            sock.close()
+        self.assertIsNotNone(frame)
+        self.assertEqual(frame["request_id"], "a" * 32)
+        self.assertIn("error", frame)
+        self.assertIn("version", frame["error"].lower())
+
+    def test_interleaved_requests_same_connection_correlated(self):
+        rid_a = "a" * 32
+        rid_b = "b" * 32
+        tok_a = encode_request(cmd="status", request_id=rid_a)
+        tok_b = encode_request(cmd="status", request_id=rid_b)
+        sock = socket.create_connection(("localhost", self.port), timeout=5.0)
+        try:
+            sock.sendall((f"agent {tok_a}" + "\n").encode("utf-8"))
+            frame_a = self._read_frame(sock)
+            self.assertIsNotNone(frame_a)
+            self.assertEqual(frame_a["request_id"], rid_a)
+            sock.sendall((f"agent {tok_b}" + "\n").encode("utf-8"))
+            frame_b = self._read_frame(sock)
+            self.assertIsNotNone(frame_b)
+            self.assertEqual(frame_b["request_id"], rid_b)
+        finally:
+            sock.close()
+
+    def test_stage_metachar_path_never_interpreted(self):
+        spacer_dir = os.path.join(self.temp_dir, "job with; meta")
+        os.makedirs(spacer_dir, exist_ok=True)
+        copied = os.path.join(spacer_dir, os.path.basename(self.job_svg))
+        shutil.copy(self.job_svg, copied)
+        svg_bytes = open(copied, "rb").read()
+        sha = hashlib.sha256(svg_bytes).hexdigest()
+        manifest_bytes = json.dumps(
+            {"files": {"job_svg": {"sha256": sha}}}
+        ).encode()
+        reply = attach_client_test.send(
+            "localhost", self.port, "stage", manifest=manifest_bytes, svg=svg_bytes
+        )
+        self.assertNotIn("error", reply)
+        loaded = reply.get("loaded", "")
+        self.assertNotIn("job with; meta", loaded)
+        self.assertTrue(
+            os.path.basename(loaded).startswith("mk_stage_"),
+            msg=f"receiver loaded from unexpected path: {loaded}",
+        )
+
+    def test_legacy_literal_command_rejected(self):
+        """ADR-0003 decision #3: no legacy protocol fallback. A literal
+        `agent status` line (the pre-envelope console form) must be rejected
+        with an error frame carrying no request_id / protocol, never silently
+        honoured."""
+        sock = socket.create_connection(("localhost", self.port), timeout=5.0)
+        try:
+            sock.sendall(b"agent status\n")
+            frame = self._read_frame(sock)
+        finally:
+            sock.close()
+        self.assertIsNotNone(frame)
+        self.assertIn("error", frame)
+        self.assertIsNone(frame.get("request_id"))
+        self.assertNotIn("protocol", frame)
+
 if __name__ == "__main__":
     unittest.main()
