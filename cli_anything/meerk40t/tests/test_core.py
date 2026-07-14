@@ -2693,7 +2693,7 @@ class TestStageFileScene(JobFixtureTestCase):
 
     def test_stage_inventory_mismatch_refused(self):
         svg_path, manifest = self._prepare_kraft()
-        before = self._scene()
+        before = self._snapshot()
         # Keep roles/estimated_roles intact so preflight passes; only inflate the
         # declared element count so the loaded scene mismatches the manifest.
         ops = [dict(o) for o in manifest["operations"]]
@@ -2703,7 +2703,54 @@ class TestStageFileScene(JobFixtureTestCase):
         reply = self._stage(svg_path, tampered)
         self.assertIn("error", reply)
         self.assertIn("inventory mismatch", reply["error"])
-        self.assertEqual(self._scene(), before)
+        self.assertEqual(
+            self._snapshot(), before,
+            "pre-existing scene must be structurally identical (root identity + order) after refusal",
+        )
+
+    def test_stage_inventory_mismatch_restores_preexisting_ops(self):
+        # The #51 regression: the clean meerk40t 0.9.9100 SVG loader is additive
+        # for user elements but REMOVES the pre-existing scene roots (operations)
+        # during load(); the net replace is driven by _commit_replacement
+        # detaching pre-existing roots on a successful commit. A refused stage
+        # must therefore restore the displaced pre-existing ops by node identity.
+        # We seed deterministic pre-existing ops (install-agnostic) rather than
+        # relying on backend boot defaults, then refuse a staging and assert
+        # every seeded op is present AND still attached afterwards. On the
+        # pre-fix parent commit the loader displaces these ops and nothing
+        # restores them, so the test is RED there (the ops go missing).
+        operations.clear_operations(self.backend)
+        operations.add_operation(self.backend, "engrave")
+        operations.add_operation(self.backend, "engrave")
+        operations.add_operation(self.backend, "cut")
+        pre_nodes = list(self.kernel.elements.ops())
+        pre_ids = {id(n) for n in pre_nodes}
+        self.assertEqual(len(pre_ids), 3, "expected exactly 3 seeded ops")
+
+        svg_second, man_second = self._prepare_kraft()
+        ops = [dict(o) for o in man_second["operations"]]
+        ops[0] = dict(ops[0])
+        ops[0]["elements"] = ops[0].get("elements", 0) + 1
+        tampered = {**man_second, "operations": ops}
+        reply = self._stage(svg_second, tampered)
+        self.assertIn("error", reply)
+        self.assertIn("inventory mismatch", reply["error"])
+
+        after_ids = {id(n) for n in self.kernel.elements.ops()}
+        missing = pre_ids - after_ids
+        self.assertFalse(
+            missing,
+            f"pre-existing ops displaced by loader not restored on refusal: {missing}",
+        )
+        # Each restored op must be genuinely attached (not a dangling id).
+        live_nodes = {id(n): n for n in self.kernel.elements.ops()}
+        for pid in pre_ids:
+            node = live_nodes.get(pid)
+            self.assertIsNotNone(node, "pre-existing op must remain in the tree")
+            self.assertIsNotNone(
+                getattr(node, "_parent", None),
+                "pre-existing op must remain attached after refusal",
+            )
 
     def test_stage_estimated_gate(self):
         svg_path, manifest = self._prepare_estimated()

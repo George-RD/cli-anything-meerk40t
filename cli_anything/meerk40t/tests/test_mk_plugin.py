@@ -96,20 +96,26 @@ class BridgePluginTest(unittest.TestCase):
     # -- version fast-path --------------------------------------------------
 
     def test_version_fastpath_skips_when_fixed(self):
-        original = mk._meerk40t_version
-
-        def fake_version():
-            return "0.9.9001"
-
-        mk._meerk40t_version = fake_version
+        original_ver = mk._meerk40t_version
+        original_ufv = mk.UPSTREAM_FIXED_VERSION
         try:
+            def fake_version():
+                return "0.9.9001"
+
+            mk._meerk40t_version = fake_version
+            # Declare the fixed version as already released; with the installed
+            # version >= it, the VERSION fast-path (not behavioural detection)
+            # reports upstream as fixed. Use the real detector - the class setUp
+            # forces the lambda False only to simulate a stock install elsewhere.
+            mk.UPSTREAM_FIXED_VERSION = (0, 0, 1)
+            mk._upstream_fixed = self._orig_upstream_fixed
             kernel = boot_kernel()
         finally:
-            mk._meerk40t_version = original
+            mk._meerk40t_version = original_ver
+            mk.UPSTREAM_FIXED_VERSION = original_ufv
+            mk._upstream_fixed = self._orig_upstream_fixed
         status = getattr(kernel, "_cli_anything_mk_patches", {})
-        self.assertEqual(
-            status.get(mk.PATCH_HANDOVER), "skipped-already-fixed"
-        )
+        self.assertEqual(status.get(mk.PATCH_HANDOVER), "skipped-already-fixed")
         self.assertEqual(status.get(mk.PATCH_TYPED), "skipped-already-fixed")
         self.assertEqual(status.get(mk.PATCH_FEEDBACK), "skipped-already-fixed")
 
@@ -243,13 +249,36 @@ class BridgePluginTest(unittest.TestCase):
         kernel.console("set idem_len 10mm\n")
         self.assertIsInstance(root.idem_len, Length)
         self.assertEqual(root.idem_len, Length("10mm"))
-
     def test_already_fixed_set_is_noop(self):
         kernel = boot_kernel()
         root = kernel.root
         root.fixed_len = Length("0mm")
-        # The dev install already carries the fixes; apply must no-op.
-        mk.apply_backfill_patches(kernel)
+        # Hermetic behavioural case: install the faithful fixed set command and
+        # make discovery return it. meerk40t registers several `set` aliases, so
+        # the default lookup can return a stale broken one; we patch lookup to
+        # the marker-verified fixed command. With the fixed command present and
+        # the upstream NOT pre-claimed-fixed (the class forces
+        # _upstream_fixed=False), the typed/feedback detectors must classify it
+        # as already-fixed and skip — proving the behavioural detectors, not
+        # just the version short-circuit.
+        mk._register_fixed_set(kernel)
+        fixed_func = None
+        for funct, _n, _r in kernel.find("command", "None", "set"):
+            if mk._set_source_markers(mk._unwrap_source(funct)) == (True, True):
+                fixed_func = funct
+                break
+        self.assertIsNotNone(
+            fixed_func, "expected a registered set command carrying both markers"
+        )
+        real_get = mk._get_registered_set
+        mk._get_registered_set = lambda k: fixed_func
+        if hasattr(kernel, "_cli_anything_mk_patches"):
+            del kernel._cli_anything_mk_patches
+        try:
+            # _upstream_fixed stays the class-forced False (behavioural path).
+            mk.apply_backfill_patches(kernel)
+        finally:
+            mk._get_registered_set = real_get
         status = getattr(kernel, "_cli_anything_mk_patches", {})
         self.assertEqual(status.get(mk.PATCH_TYPED), "skipped-already-fixed")
         self.assertEqual(status.get(mk.PATCH_FEEDBACK), "skipped-already-fixed")
@@ -257,6 +286,7 @@ class BridgePluginTest(unittest.TestCase):
         root.fixed_len = Length("0mm")
         kernel.console("set fixed_len 10mm\n")
         self.assertIsInstance(root.fixed_len, Length)
+        self.assertEqual(root.fixed_len, Length("10mm"))
 
     # -- failure isolation -------------------------------------------------
 
