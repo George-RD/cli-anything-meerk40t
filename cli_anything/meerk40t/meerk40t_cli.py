@@ -418,7 +418,11 @@ def cli(
     # channel and never touches the local kernel; skip the backend bootstrap
     # so `attach status` against a missing server fails fast instead of
     # paying the Meerk40t kernel startup cost.
-    if ctx.invoked_subcommand == "attach":
+    # Neither `profile` subcommand needs the local kernel: `profile validate`
+    # is fully side-effect free, `profile submit` only plans (its --yes path
+    # drives an isolated temp clone, never the local kernel), so skip the
+    # backend bootstrap for the whole group.
+    if ctx.invoked_subcommand in ("attach", "profile"):
         backend = None
     else:
         backend = Meerk40tBackend(device=device, port=port, baud=baud)
@@ -967,6 +971,61 @@ def profile_submit(ctx, name, yes):
         click.echo("")
         click.echo("Install the gh CLI and re-run with --yes to open a PR,")
         click.echo("or open the issue URL above to submit manually.")
+
+
+def _read_profile_input(input_file):
+    """Read profile JSON text from ``--input FILE`` or, when omitted, stdin."""
+    if input_file is None:
+        return sys.stdin.read()
+    with open(input_file, "r", encoding="utf-8") as fh:
+        return fh.read()
+
+
+@profile.command("validate")
+@click.option(
+    "--input",
+    "input_file",
+    default=None,
+    help="Read profile JSON from FILE instead of stdin.",
+)
+@click.pass_context
+def profile_validate(ctx, input_file):
+    """Validate a machine profile JSON without side effects.
+
+    Reads profile JSON from stdin by default, or from ``--input FILE``. Runs
+    the canonical ``validate_submission`` used by ``profile submit`` and by
+    CLI profile loading, so a profile accepted here is accepted everywhere.
+
+    On malformed JSON or any validation error it prints a structured
+    ``ok: false`` payload (with ``error``/``validation_errors``) and exits 1,
+    with no traceback leaked. A valid profile prints ``ok: true`` and exits 0.
+    This command performs no network, git, or file-write operations.
+    """
+    try:
+        raw = _read_profile_input(input_file)
+    except OSError as exc:
+        _emit(ctx, {"ok": False, "error": f"cannot read input: {exc}", "validation_errors": []})
+        sys.stdout = _REAL_STDOUT
+        ctx.exit(1)
+    try:
+        profile = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        _emit(ctx, {"ok": False, "error": f"invalid JSON: {exc}", "validation_errors": []})
+        sys.stdout = _REAL_STDOUT
+        ctx.exit(1)
+    errors = submit_mod.validate_submission(profile)
+    if errors:
+        _emit(
+            ctx,
+            {
+                "ok": False,
+                "error": "profile failed submission validation",
+                "validation_errors": errors,
+            },
+        )
+        sys.stdout = _REAL_STDOUT
+        ctx.exit(1)
+    _emit(ctx, {"ok": True})
 @device.command("move")
 @click.argument("x")
 @click.argument("y")
