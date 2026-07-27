@@ -31,7 +31,7 @@
   height: 3.5rem;
   flex: none;
   place-items: center;
-  border : 2px solid currentColor;
+  border: 2px solid currentColor;
   border-radius: 50%;
   font-family: var(--mono);
   font-size: 1.15rem;
@@ -159,7 +159,7 @@
 
 .example-visual {
   min-width: 0;
-  border : 1px solid var(--ink);
+  border: 1px solid var(--ink);
   background:
     linear-gradient(rgba(16,24,20,.06) 1px, transparent 1px),
     linear-gradient(90deg, rgba(16,24,20,.06) 1px, transparent 1px),
@@ -201,7 +201,7 @@
   gap: 2rem;
   align-items: end;
   margin: 0 var(--page-pad);
-  padding: clamp(3kzem, 6vw, 5rem) 0;
+  padding: clamp(3rem, 6vw, 5rem) 0;
   border-top: 1px solid var(--ink);
 }
 
