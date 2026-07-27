@@ -1,0 +1,441 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#e8efe8">
+  <meta name="color-scheme" content="light">
+  <title>CLI Anything × MeerK40t — Agent-native laser job preparation</title>
+  <meta name="description" content="A stateful CLI and REPL around the real MeerK40t kernel. Prepare, export, and preflight laser jobs offline, then hand control to an operator.">
+  <link rel="canonical" href="https://george-rd.github.io/cli-anything-meerk40t/">
+  <meta property="og:type" content="website">
+  <meta property="og:title" content="CLI Anything × MeerK40t">
+  <meta property="og:description" content="Let an agent prepare the job. Keep the operator in control.">
+  <meta property="og:url" content="https://george-rd.github.io/cli-anything-meerk40t/">
+  <meta property="og:image" content="https://george-rd.github.io/cli-anything-meerk40t/og.png">
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:title" content="CLI Anything × MeerK40t">
+  <meta name="twitter:description" content="Agent-native laser job preparation through the real MeerK40t kernel.">
+  <meta name="twitter:image" content="https://george-rd.github.io/cli-anything-meerk40t/og.png">
+  <link rel="icon" href="./favicon.svg" type="image/svg+xml">
+  <link rel="manifest" href="./site.webmanifest">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,400..800&amp;family=Spline+Sans+Mono:wght@400;500;600&amp;display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="./styles.css">
+  <script src="./script.js" defer></script>
+</head>
+<body>
+  <!--
+  THESIS: A laser job should visibly cross from agent preparation to human operation; this refuses the generic dark terminal landing page.
+  OWN-WORLD: Cool workshop stock, registration marks, cut/etch inks, clipped controls, and one moving laser head.
+  STORY: Understand the real-kernel CLI, see the offline workflow, respect the calibration boundary, then install or inspect the source.
+  FIRST VIEWPORT: Copy and install action at left; a working A3 laser-bed dossier at right; GitHub remains visible in the header.
+  FORM: Persuade surface staged as an operator job sheet, with the mechanism demonstrated before feature explanation.
+  -->
+
+  <a class="skip-link" href="#main">Skip to content</a>
+  <div class="scroll-meter" aria-hidden="true"><span></span></div>
+  <div class="paper-noise" aria-hidden="true"></div>
+
+  <header class="site-header">
+    <a class="brand" href="#top" aria-label="CLI Anything MeerK40t home">
+      <svg class="brand-mark" viewBox="0 0 40 40" aria-hidden="true">
+        <path d="M5 9h30v22H5z" fill="none" stroke="currentColor" stroke-width="2"/>
+        <path d="M10 15h12M10 20h18M10 25h8" fill="none" stroke="currentColor" stroke-width="2"/>
+        <path d="M31 4v7M27.5 7.5h7" fill="none" stroke="var(--signal)" stroke-width="2"/>
+      </svg>
+      <span class="brand-copy">
+        <strong>CLI Anything</strong>
+        <span>× MeerK40t</span>
+      </span>
+    </a>
+
+    <nav class="main-nav" aria-label="Primary navigation">
+      <a href="#workflow">Workflow</a>
+      <a href="#safety">Safety boundary</a>
+      <a href="#commands">Commands</a>
+      <a class="nav-github" href="https://github.com/George-RD/cli-anything-meerk40t">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M12 .8a11.2 11.2 0 0 0-3.54 21.83c.56.1.77-.24.77-.54v-2.17c-3.13.68-3.79-1.33-3.79-1.33-.51-1.3-1.25-1.65-1.25-1.65-1.02-.7.08-.68.08-.68 1.13.08 1.72 1.16 1.72 1.16 1 1.72 2.63 1.22 3.27.93.1-.73.39-1.22.71-1.5-2.5-.28-5.13-1.25-5.13-5.55 0-1.23.44-2.23 1.16-3.02-.12-.28-.5-1.43.11-2.98 0 0 .95-.3 3.08 1.15A10.7 10.7 0 0 1 12 6.27c.95 0 1.9.13 2.8.38 2.14-1.45 3.08-1.15 3.08-1.15.62 1.55.23 2.7.12 2.98.72.79 1.15 1.8 1.15 3.02 0 4.31-2.64 5.26-5.15 5.54.4.35.76 1.04.76 2.1v2.95c0 .3.2.65.77.54A11.2 11.2 0 0 0 12 .8Z"/></svg>
+        <span>GitHub</span>
+      </a>
+    </nav>
+  </header>
+
+  <main id="main">
+    <section class="hero" id="top">
+      <div class="hero-copy">
+        <p class="status-line"><span class="status-pulse" aria-hidden="true"></span> v1.4.0 · real MeerK40t kernel</p>
+        <h1>Let an agent prepare the job. <em>Keep the operator in control.</em></h1>
+        <p class="hero-intro">A stateful CLI and REPL for taking a design from SVG to inspected G-code through MeerK40t itself. Most work happens offline. The laser stays behind an explicit human boundary.</p>
+
+        <div class="install-stack" aria-label="Installation commands">
+          <div class="install-line">
+            <span class="prompt" aria-hidden="true">$</span>
+            <code>pip install cli-anything-meerk40t</code>
+            <button class="copy-button" type="button" data-copy="pip install cli-anything-meerk40t" aria-label="Copy pip install command">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 8h11v11H8zM5 5h11v3M5 5v11h3" fill="none" stroke="currentColor" stroke-width="1.8"/></svg>
+              <span>Copy</span>
+            </button>
+          </div>
+          <div class="skill-install">
+            <span>Agent skill</span>
+            <code>npx skills add George-RD/cli-anything-meerk40t --skill cli-anything-meerk40t -g -y</code>
+            <button class="copy-button copy-button--quiet" type="button" data-copy="npx skills add George-RD/cli-anything-meerk40t --skill cli-anything-meerk40t -g -y" aria-label="Copy agent skill install command">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 8h11v11H8zM5 5h11v3M5 5v11h3" fill="none" stroke="currentColor" stroke-width="1.8"/></svg>
+              <span>Copy</span>
+            </button>
+          </div>
+        </div>
+
+        <div class="hero-actions">
+          <a class="button button--primary" href="#workflow">Trace a job</a>
+          <a class="text-link" href="https://github.com/George-RD/cli-anything-meerk40t">
+            Inspect the source
+            <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M4 10h11M11 6l4 4-4 4" fill="none" stroke="currentColor" stroke-width="1.8"/></svg>
+          </a>
+        </div>
+      </div>
+
+      <div class="laser-dossier" aria-label="Animated illustration of a laser job moving from SVG through preparation and preflight">
+        <div class="dossier-topbar">
+          <span>JOB / KRAFT-HOUSE-A3</span>
+          <span class="registration">420 × 297 MM</span>
+          <span class="job-state"><i aria-hidden="true"></i> OFFLINE PREP</span>
+        </div>
+
+        <div class="laser-bed">
+          <svg class="job-art" viewBox="0 0 760 520" role="img" aria-labelledby="job-art-title job-art-desc">
+            <title id="job-art-title">A3 laser job sheet</title>
+            <desc id="job-art-desc">A stylised cut sheet for the repository's kraft house example with a moving laser head and cut, score, and etch paths.</desc>
+            <defs>
+              <pattern id="minorGrid" width="20" height="20" patternUnits="userSpaceOnUse">
+                <path d="M20 0H0V20" fill="none" stroke="currentColor" stroke-opacity=".09" stroke-width="1"/>
+              </pattern>
+              <pattern id="majorGrid" width="100" height="100" patternUnits="userSpaceOnUse">
+                <rect width="100" height="100" fill="url(#minorGrid)"/>
+                <path d="M100 0H0V100" fill="none" stroke="currentColor" stroke-opacity=".18" stroke-width="1"/>
+              </pattern>
+              <filter id="beamGlow" x="-100%" y="-100%" width="300%" height="300%">
+                <feGaussianBlur stdDeviation="5" result="blur"/>
+                <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+              </filter>
+              <path id="laserRoute" d="M132 142H292V280H458V142H626V354H510V410H250V354H132Z"/>
+            </defs>
+
+            <rect x="28" y="26" width="704" height="468" rx="2" fill="url(#majorGrid)" class="bed-grid"/>
+            <path d="M28 44h18M28 26v18M714 26v18M714 44h18M28 476h18M28 494v-18M714 494v-18M714 476h18" class="registration-marks"/>
+
+            <g class="sheet-labels" aria-hidden="true">
+              <text x="48" y="62">A3 / 1:1</text>
+              <text x="612" y="62">ORIGIN: TL</text>
+              <text x="48" y="474">CUT: RED · SCORE: BLUE · ETCH: INK</text>
+              <text x="620" y="474">Y-FLIP / ON</text>
+            </g>
+
+            <g class="house-parts" fill="none">
+              <path class="cut-path cut-path--one" pathLength="1" d="M94 112h230v238H94z"/>
+              <path class="cut-path cut-path--two" pathLength="1" d="M350 112h166l78 72v166H350z"/>
+              <path class="cut-path cut-path--three" pathLength="1" d="M100 382h212l-48 74H148z"/>
+              <path class="cut-path cut-path--four" pathLength="1" d="M350 382h232l-48 74H398z"/>
+
+              <path class="score-path score-path--one" pathLength="1" d="M94 184h230M94 278h230M350 184h244M350 278h244"/>
+              <path class="score-path score-path--two" pathLength="1" d="M166 112v238M252 112v238M430 112v238M516 112v238"/>
+
+              <g class="etch-paths">
+                <path d="M112 132h194M112 150h194M112 168h194M112 202h194M112 220h194M112 238h194M112 256h194M112 296h194M112 314h194M112 332h194"/>
+                <path d="M370 132h128M370 150h148M370 168h168M370 202h204M370 220h204M370 238h204M370 256h204M370 296h204M370 314h204M370 332h204"/>
+                <path d="M125 112v56M148 112v56M190 112v56M213 112v56M274 112v56M297 112v56"/>
+                <path d="M385 112v56M408 112v56M450 112v56M473 112v56M535 130v56M558 151v56"/>
+              </g>
+
+              <g class="openings">
+                <rect x="116" y="210" width="48" height="62"/>
+                <rect x="185" y="210" width="48" height="62"/>
+                <rect x="254" y="210" width="48" height="62"/>
+                <rect x="375" y="210" width="48" height="62"/>
+                <rect x="444" y="210" width="48" height="62"/>
+                <rect x="513" y="210" width="48" height="62"/>
+                <path d="M442 154a20 20 0 1 0 40 0 20 20 0 1 0-40 0"/>
+              </g>
+            </g>
+
+            <path d="M132 142H292V280H458V142H626V354H510V410H250V354H132Z" class="route-guide"/>
+
+            <g class="laser-head">
+              <rect x="-17" y="-14" width="34" height="28" rx="2"/>
+              <path d="M-8 14v15M8 14v15"/>
+              <circle r="4" cy="33" class="laser-dot" filter="url(#beamGlow)"/>
+              <animateMotion dur="11s" repeatCount="indefinite" rotate="auto">
+                <mpath href="#laserRoute"/>
+              </animateMotion>
+            </g>
+          </svg>
+
+          <div class="operation-key" aria-hidden="true">
+            <span><i class="key-cut"></i> CUT</span>
+            <span><i class="key-score"></i> SCORE</span>
+            <span><i class="key-etch"></i> ETCH</span>
+          </div>
+        </div>
+
+        <div class="dossier-footer">
+          <div>
+            <span>INPUT</span>
+            <strong>house_a3.svg</strong>
+          </div>
+          <div>
+            <span>PROFILE</span>
+            <strong>sculpfun-s9</strong>
+          </div>
+          <div>
+            <span>MATERIAL</span>
+            <strong>kraft-350gsm</strong>
+          </div>
+          <div class="dossier-output">
+            <span>OUTPUT</span>
+            <strong>SVG · G-CODE · MANIFEST</strong>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="proof-band" aria-label="Project facts">
+      <div>
+        <span class="proof-label">Backend</span>
+        <strong>Real MeerK40t kernel</strong>
+        <p>Not a simulated API or a second implementation.</p>
+      </div>
+      <div>
+        <span class="proof-label">Default path</span>
+        <strong>Offline first</strong>
+        <p>Build, export, and verify with no laser attached.</p>
+      </div>
+      <div>
+        <span class="proof-label">Hardware check</span>
+        <strong>Live-verified on Sculpfun S9</strong>
+        <p>GRBL 1.1h over CH340 on macOS.</p>
+      </div>
+    </section>
+
+    <section class="mechanism" id="workflow">
+      <div class="section-lead">
+        <p class="section-kicker">The mechanism</p>
+        <h2>A job crosses a boundary before the laser does.</h2>
+        <p>Agents can do the repetitive preparation. The manifest, material profile, and preflight make that work inspectable. Calibration and physical operation stay with a person at the machine.</p>
+      </div>
+
+      <ol class="job-flow" aria-label="Laser job workflow">
+        <li>
+          <span class="flow-index">A</span>
+          <div>
+            <h3>Describe</h3>
+            <p>Open an SVG or build geometry with element commands.</p>
+            <code>elements rect · text · polyline</code>
+          </div>
+        </li>
+        <li>
+          <span class="flow-index">B</span>
+          <div>
+            <h3>Resolve</h3>
+            <p>Select the machine and material profile instead of hand-typing settings.</p>
+            <code>--machine sculpfun-s9</code>
+          </div>
+        </li>
+        <li>
+          <span class="flow-index">C</span>
+          <div>
+            <h3>Prepare</h3>
+            <p>Write a job SVG, G-code, and a manifest that records what produced them.</p>
+            <code>job prepare</code>
+          </div>
+        </li>
+        <li>
+          <span class="flow-index">D</span>
+          <div>
+            <h3>Preflight</h3>
+            <p>Re-check file hashes and the settings fingerprint before the job moves on.</p>
+            <code>job preflight</code>
+          </div>
+        </li>
+        <li class="human-boundary">
+          <span class="boundary-tag">Operator boundary</span>
+          <span class="boundary-line" aria-hidden="true"></span>
+        </li>
+        <li>
+          <span class="flow-index">E</span>
+          <div>
+            <h3>Frame &amp; run</h3>
+            <p>Connect, check origin and placement, then operate the machine in person.</p>
+            <code>device check · frame</code>
+          </div>
+        </li>
+      </ol>
+    </section>
+
+    <section class="terminal-lab" aria-labelledby="terminal-title">
+      <div class="terminal-copy">
+        <p class="section-kicker">See the states</p>
+        <h2 id="terminal-title">The CLI says what kind of job you have.</h2>
+        <p>Switch between an offline prepare, a manifest preflight, and the operator-present hardware path. Outputs below are illustrative; the commands are real.</p>
+
+        <div class="command-tabs" role="tablist" aria-label="Command examples">
+          <button type="button" role="tab" id="tab-prepare" aria-controls="command-panel" aria-selected="true" tabindex="0" data-command="prepare">Prepare</button>
+          <button type="button" role="tab" id="tab-preflight" aria-controls="command-panel" aria-selected="false" tabindex="-1" data-command="preflight">Preflight</button>
+          <button type="button" role="tab" id="tab-hardware" aria-controls="command-panel" aria-selected="false" tabindex="-1" data-command="hardware">Hardware</button>
+        </div>
+      </div>
+
+      <div class="terminal-window" id="command-panel" role="tabpanel" aria-labelledby="tab-prepare" tabindex="0">
+        <div class="terminal-bar">
+          <span>cli-anything-meerk40t</span>
+          <span class="terminal-mode" data-terminal-mode>OFFLINE / PREPARE</span>
+        </div>
+        <div class="terminal-body">
+          <p class="terminal-command"><span aria-hidden="true">$</span><code data-terminal-command>cli-anything-meerk40t --json --machine sculpfun-s9 job prepare house_a3.svg --out-dir ./output --material kraft-350gsm --allow-estimated</code></p>
+          <pre aria-live="polite"><code data-terminal-output>{
+  "status": "prepared",
+  "burn_ready": false,
+  "settings": "estimated",
+  "artifacts": [
+    "house_a3_job.svg",
+    "house_a3.gcode",
+    "house_a3_manifest.json"
+  ]
+}</code></pre>
+        </div>
+        <div class="terminal-note" data-terminal-note>
+          <span>ESTIMATED</span>
+          <p>Useful for inspection and preflight. Calibrate on scrap before a real frame or burn.</p>
+        </div>
+      </div>
+    </section>
+
+    <section class="safety" id="safety">
+      <div class="safety-heading">
+        <p class="section-kicker">Safety boundary</p>
+        <h2>Estimated is not calibrated.</h2>
+      </div>
+
+      <div class="safety-grid">
+        <article class="safety-lane safety-lane--offline">
+          <div class="lane-heading">
+            <span class="lane-symbol" aria-hidden="true">○</span>
+            <div><span>NO HARDWARE</span><h3>Safe offline work</h3></div>
+          </div>
+          <ul>
+            <li>Build or edit geometry</li>
+            <li>Resolve a machine and material profile</li>
+            <li>Export job SVG and G-code for inspection</li>
+            <li>Verify hashes and settings fingerprint</li>
+          </ul>
+          <p class="lane-command"><code>--allow-estimated</code> acknowledges an inspection-only result. It does not make it burn-ready.</p>
+        </article>
+
+        <article class="safety-lane safety-lane--operator">
+          <div class="lane-heading">
+            <span class="lane-symbol" aria-hidden="true">!</span>
+            <div><span>LASER CONNECTED</span><h3>Operator present</h3></div>
+          </div>
+          <ol>
+            <li>Run a calibration ladder on scrap</li>
+            <li>Record the result with <code>materials record</code></li>
+            <li>Prepare again without <code>--allow-estimated</code></li>
+            <li>Check focus, origin, glasses, ventilation, and placement</li>
+          </ol>
+          <p class="lane-command">Frame and run only from calibrated settings, at the machine.</p>
+        </article>
+      </div>
+
+      <aside class="network-warning">
+        <svg viewBox="0 0 28 28" aria-hidden="true"><path d="M14 3 2.5 24h23L14 3Z" fill="none" stroke="currentColor" stroke-width="2"/><path d="M14 10v7M14 21h.01" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"/></svg>
+        <div>
+          <strong>The MeerK40t console server is unauthenticated.</strong>
+          <p>Keep it bound to loopback and firewall-restricted. Request correlation is not authentication, and the port must never be exposed to the internet.</p>
+        </div>
+        <a href="https://github.com/George-RD/cli-anything-meerk40t/blob/main/skills/cli-anything-meerk40t/references/gui-operation.md">Read the boundary</a>
+      </aside>
+    </section>
+
+    <section class="capabilities" id="commands">
+      <div class="section-lead section-lead--compact">
+        <p class="section-kicker">Command surface</p>
+        <h2>Enough structure for an agent. Enough escape hatches for an operator.</h2>
+      </div>
+
+      <dl class="command-grid">
+        <div><dt>project</dt><dd>new · open · save · info · close</dd></div>
+        <div><dt>elements</dt><dd>geometry · text · select · delete · frame</dd></div>
+        <div><dt>operations</dt><dd>cut · engrave · raster · classify · set</dd></div>
+        <div><dt>machine</dt><dd>bundled and user profiles</dd></div>
+        <div><dt>materials</dt><dd>list · show · create · record</dd></div>
+        <div><dt>job</dt><dd>prepare · preflight · ladder</dd></div>
+        <div><dt>device</dt><dd>detect · check · jog · goto · frame</dd></div>
+        <div><dt>attach</dt><dd>status · stage into a running GUI</dd></div>
+        <div><dt>export</dt><dd>SVG · SVGZ · G-code · PNG*</dd></div>
+        <div><dt>session</dt><dd>undo · redo · history · status</dd></div>
+        <div><dt>console</dt><dd>raw MeerK40t passthrough</dd></div>
+        <div><dt>repl</dt><dd>persistent interactive session</dd></div>
+      </dl>
+      <p class="command-footnote">* PNG export depends on the GUI environment. G-code uses the real GRBL device pipeline.</p>
+    </section>
+
+    <section class="example-section">
+      <div class="example-visual" aria-hidden="true">
+        <svg viewBox="0 0 720 500">
+          <g fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M110 110h210v230H110zM400 110h150l70 65v165H400z"/>
+            <path d="M125 375h185l-42 64H167zM402 375h205l-42 64H444z"/>
+            <path d="M110 170h210M110 265h210M400 170h220M400 265h220" class="example-score"/>
+            <path d="M145 205h48v62h-48zM225 205h48v62h-48zM432 205h48v62h-48zM512 205h48v62h-48z"/>
+            <path d="M435 150a20 20 0 1 0 40 0 20 20 0 1 0-40 0"/>
+          </g>
+          <g class="example-dimensions">
+            <path d="M110 78h210M110 72v12M320 72v12"/>
+            <text x="188" y="68">230 MM</text>
+            <path d="M78 110v230M72 110h12M72 340h12"/>
+            <text x="50" y="246" transform="rotate(-90 50 246)">238 MM</text>
+          </g>
+          <text x="110" y="475" class="example-stamp">WORKED EXAMPLE / KRAFT HOUSE / A3</text>
+        </svg>
+      </div>
+
+      <div class="example-copy">
+        <p class="section-kicker">Included example</p>
+        <h2>Not just a command list. A complete job you can inspect.</h2>
+        <p>The repository ships with an A3 kraft-house design, its generator, and prepared artifacts. Copy the example anywhere and run preflight against the relocatable manifest.</p>
+        <div class="example-links">
+          <a class="button button--secondary" href="https://github.com/George-RD/cli-anything-meerk40t/tree/main/examples/kraft-house">Open the kraft-house example</a>
+          <a class="text-link" href="https://github.com/George-RD/cli-anything-meerk40t/blob/main/MEERK40T.md">Read the operating SOP <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M4 10h11M11 6l4 4-4 4" fill="none" stroke="currentColor" stroke-width="1.8"/></svg></a>
+        </div>
+      </div>
+    </section>
+
+    <section class="final-cta">
+      <div>
+        <p class="section-kicker">Start offline</p>
+        <h2>Build the job before you connect the machine.</h2>
+      </div>
+      <div class="final-actions">
+        <button class="button button--primary copy-install-final" type="button" data-copy="pip install cli-anything-meerk40t">Copy install command</button>
+        <a class="button button--ghost" href="https://github.com/George-RD/cli-anything-meerk40t">View on GitHub</a>
+      </div>
+    </section>
+  </main>
+
+  <footer class="site-footer">
+    <div>
+      <strong>CLI Anything × MeerK40t</strong>
+      <span>MIT licensed · built by <a href="https://github.com/George-RD">George-RD</a></span>
+    </div>
+    <div class="footer-links">
+      <a href="https://pypi.org/project/cli-anything-meerk40t/">PyPI</a>
+      <a href="https://github.com/George-RD/cli-anything-meerk40t/blob/main/skills/cli-anything-meerk40t/SKILL.md">Agent skill</a>
+      <a href="https://clianything.cc/">CLI-Hub</a>
+      <a href="https://github.com/HKUDS/CLI-Anything">CLI-Anything</a>
+    </div>
+  </footer>
+
+  <div class="toast" role="status" aria-live="polite" aria-atomic="true" hidden>Copied</div>
+</body>
+</html>

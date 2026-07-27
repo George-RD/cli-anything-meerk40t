@@ -1,0 +1,341 @@
+:root {
+  --paper: #e8efe8;
+  --paper-bright: #f4f8f3;
+  --paper-deep: #d6e2d8;
+  --ink: #101814;
+  --ink-soft: #385046;
+  --line: #82998d;
+  --line-faint: rgba(16, 24, 20, 0.16);
+  --signal: #ff5a36;
+  --signal-deep: #c82f18;
+  --score: #165dff;
+  --score-deep: #0b38a7;
+  --safe: #08785a;
+  --warning-paper: #ffdd56;
+  --white: #fbfdfa;
+  --display: "Bricolage Grotesque", "Aptos Display", "Segoe UI", sans-serif;
+  --mono: "Spline Sans Mono", "SFMono-Regular", Consolas, monospace;
+  --body: "Bricolage Grotesque", "Aptos", "Segoe UI", sans-serif;
+  --page-pad: clamp(1rem, 4vw, 4rem);
+  --max: 1540px;
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html {
+  scroll-behavior: smooth;
+  scroll-padding-top: 7rem;
+}
+
+body {
+  margin: 0;
+  min-width: 320px;
+  overflow-x: hidden;
+  background: var(--paper);
+  color: var(--ink);
+  font-family: var(--body);
+  font-size: 1rem;
+  line-height: 1.55;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+}
+
+button,
+a {
+  -webkit-tap-highlight-color: transparent;
+}
+
+button,
+input,
+textarea,
+select {
+  font: inherit;
+}
+
+a {
+  color: inherit;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 0.18em;
+}
+
+a:focus-visible,
+button:focus-visible,
+[tabindex]:focus-visible {
+  outline: 3px solid var(--score);
+  outline-offset: 4px;
+}
+
+::selection {
+  background: var(--warning-paper);
+  color: var(--ink);
+}
+
+.skip-link {
+  position: fixed;
+  z-index: 1000;
+  top: 0.75rem;
+  left: 0.75rem;
+  padding: 0.75rem 1rem;
+  background: var(--ink);
+  color: var(--white);
+  transform: translateY(-160%);
+  transition: transform 180ms var(--ease-out);
+}
+
+.skip-link:focus {
+  transform: translateY(0);
+}
+
+.scroll-meter {
+  position: fixed;
+  z-index: 1001;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 3px;
+  pointer-events: none;
+}
+
+.scroll-meter span {
+  display: block;
+  width: 100%;
+  height: 100%;
+  background: var(--signal);
+  transform: scaleX(0);
+  transform-origin: left;
+}
+
+.paper-noise {
+  position: fixed;
+  z-index: -1;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.25;
+  background-image:
+    radial-gradient(circle at 15% 18%, rgba(255,255,255,.72) 0 1px, transparent 1.5px),
+    radial-gradient(circle at 71% 62%, rgba(16,24,20,.14) 0 .65px, transparent 1.2px);
+  background-size: 19px 23px, 27px 31px;
+  mix-blend-mode: multiply;
+}
+
+.site-header {
+  position: relative;
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: min(100%, var(--max));
+  min-height: 6rem;
+  margin: 0 auto;
+  padding: 1.25rem var(--page-pad);
+  border-bottom: 1px solid var(--ink);
+}
+
+.brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.75rem;
+  color: var(--ink);
+  text-decoration: none;
+}
+
+.brand-mark {
+  width: 2.25rem;
+  height: 2.25rem;
+  flex: none;
+}
+
+.brand-copy {
+  display: grid;
+  line-height: 1.02;
+}
+
+.brand-copy strong {
+  font-family: var(--display);
+  font-size: 1rem;
+  font-weight: 800;
+  letter-spacing: -0.025em;
+}
+
+.brand-copy span {
+  margin-top: 0.22rem;
+  color: var(--ink-soft);
+  font-family: var(--mono);
+  font-size: 0.68rem;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.main-nav {
+  display: flex;
+  align-items: center;
+  gap: clamp(1rem, 2.2vw, 2rem);
+  font-size: 0.9rem;
+  font-weight: 650;
+}
+
+.main-nav > a:not(.nav-github) {
+  position: relative;
+  text-decoration: none;
+}
+
+.main-nav > a:not(.nav-github)::after {
+  position: absolute;
+  right: 0;
+  bottom: -0.35rem;
+  left: 0;
+  height: 2px;
+  background: var(--signal);
+  content: "";
+  transform: scaleX(0);
+  transform-origin: right;
+  transition: transform 220ms var(--ease-out);
+}
+
+.main-nav > a:not(.nav-github):hover::after,
+.main-nav > a:not(.nav-github):focus-visible::after {
+  transform: scaleX(1);
+  transform-origin: left;
+}
+
+.nav-github {
+  display: inline-flex;
+  min-height: 2.75rem;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.55rem 0.85rem;
+  border: 1px solid var(--ink);
+  background: var(--paper-bright);
+  box-shadow: 3px 3px 0 var(--ink);
+  text-decoration: none;
+  transition: box-shadow 160ms var(--ease-out), transform 160ms var(--ease-out);
+}
+
+.nav-github:hover {
+  box-shadow: 1px 1px 0 var(--ink);
+  transform: translate(2px, 2px);
+}
+
+.nav-github svg {
+  width: 1.1rem;
+  height: 1.1rem;
+}
+
+main,
+.site-footer {
+  width: min(100%, var(--max));
+  margin: 0 auto;
+}
+
+.hero {
+  display: grid;
+  min-height: calc(100svh - 6rem);
+  grid-template-columns: minmax(0, 0.86fr) minmax(36rem, 1.14fr);
+  align-items: center;
+  gap: clamp(2.5rem, 5vw, 7rem);
+  padding: clamp(3rem, 8vh, 7rem) var(--page-pad) clamp(4rem, 9vh, 7rem);
+}
+
+.hero-copy {
+  position: relative;
+  z-index: 2;
+  max-width: 42rem;
+}
+
+.status-line,
+.section-kicker,
+.proof-label,
+.dossier-topbar,
+.dossier-footer span,
+.lane-heading span,
+.terminal-bar,
+.example-stamp {
+  font-family: var(--mono);
+  font-size: 0.7rem;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.status-line {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  margin: 0 0 1.7rem;
+  color: var(--ink-soft);
+}
+
+.status-pulse {
+  position: relative;
+  width: 0.62rem;
+  height: 0.62rem;
+  border: 2px solid var(--safe);
+  border-radius: 50%;
+}
+
+.status-pulse::after {
+  position: absolute;
+  inset: 1px;
+  border-radius: inherit;
+  background: var(--safe);
+  content: "";
+}
+
+h1,
+h2,
+h3,
+p {
+  margin-top: 0;
+}
+
+h1,
+h2,
+h3 {
+  font-family: var(--display);
+  text-wrap: balance;
+}
+
+h1 {
+  max-width: 12ch;
+  margin-bottom: 1.6rem;
+  font-size: clamp(3.25rem, 5.7vw, 6.2rem);
+  font-weight: 780;
+  letter-spacing: -0.055em;
+  line-height: 0.92;
+}
+
+h1 em {
+  display: block;
+  margin-top: 0.18em;
+  color: var(--signal-deep);
+  font-style: normal;
+  font-weight: 520;
+}
+
+.hero-intro {
+  max-width: 62ch;
+  margin-bottom: 2.1rem;
+  color: var(--ink-soft);
+  font-size: clamp(1.03rem, 1.35vw, 1.25rem);
+  line-height: 1.58;
+}
+
+.install-stack {
+  max-width: 42rem;
+  border: 1px solid var(--ink);
+  background: var(--paper-bright);
+  box-shadow: 6px 6px 0 rgba(16, 24, 20, 0.18);
+}
+
+.install-line,
+.skill-install {
+  position: relative;
+  display: grid;
+  min-height: 3.6rem;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.8rem 0.85rem;
+}

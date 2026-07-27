@@ -2,6 +2,8 @@
 
 ![CLI-Anything ecosystem](https://img.shields.io/badge/CLI--Anything-ecosystem-blue)
 
+**Project site:** [george-rd.github.io/cli-anything-meerk40t](https://george-rd.github.io/cli-anything-meerk40t/)
+
 Agent CLI harness for MeerK40t laser software. It is built so an LLM, or a
 human at a terminal, can take a design from SVG to a physically engraved
 object through the real MeerK40t kernel.
