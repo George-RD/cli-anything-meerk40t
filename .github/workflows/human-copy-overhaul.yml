@@ -1,0 +1,165 @@
+name: Apply landing page copy overhaul
+
+on:
+  push:
+    branches:
+      - "agent/human-copy-overhaul"
+    paths:
+      - ".github/workflows/human-copy-overhaul.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  rewrite:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Rewrite landing page copy
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          def replace_exact(path: str, replacements: dict[str, str]) -> None:
+              file = Path(path)
+              text = file.read_text()
+              for old, new in replacements.items():
+                  if old not in text:
+                      raise SystemExit(f"Missing expected copy in {path}: {old}")
+                  text = text.replace(old, new)
+              file.write_text(text)
+
+          replace_exact("docs/index.html", {
+              '<title>Control MeerK40t from the command line — CLI Anything</title>': '<title>Turn SVGs into MeerK40t laser jobs from the command line</title>',
+              '<meta name="description" content="Build, inspect, and prepare laser jobs from a terminal or AI agent using the real MeerK40t engine.">': '<meta name="description" content="Turn SVGs into checked MeerK40t laser jobs from a terminal or AI agent. Generate G-code, manifests, and preflight results before connecting the laser.">',
+              '<meta property="og:title" content="Control MeerK40t from the command line">': '<meta property="og:title" content="Turn SVGs into MeerK40t laser jobs">',
+              '<meta property="og:description" content="Build, inspect, and prepare real laser jobs from a terminal or AI agent.">': '<meta property="og:description" content="Generate G-code, manifests, and preflight results before connecting the laser.">',
+              '<meta name="twitter:title" content="Control MeerK40t from the command line">': '<meta name="twitter:title" content="Turn SVGs into MeerK40t laser jobs">',
+              '<meta name="twitter:description" content="A real CLI for building and checking MeerK40t laser jobs.">': '<meta name="twitter:description" content="A command line for taking an SVG through MeerK40t and into a checked laser job.">',
+              '  THESIS: Show how a design becomes a checked MeerK40t job before anyone connects a laser.': '  THESIS: Show a real SVG becoming a checked MeerK40t job before anyone connects the machine.',
+              '  STORY: Understand the CLI at a glance, follow a job from SVG to preflight, then install it or inspect the source.': '  STORY: See what the tool does, why it exists, and every file it creates before installing it.',
+              '<a href="#safety">Safety boundary</a>': '<a href="#safety">At the laser</a>',
+              '<h1>Control MeerK40t <em>from the command line.</em></h1>': '<h1>Turn an SVG into a laser job. <em>From the command line.</em></h1>',
+              '<p class="hero-intro">MeerK40t already has a powerful laser engine. This gives it a stateful CLI, so you can build, inspect, and prepare jobs from a terminal or an AI agent. Connect the machine only when the job is ready and someone is there to run it.</p>': '<p class="hero-intro">Load a design, choose the machine and material, generate G-code, and check the result through MeerK40t\'s own engine. I built this because I wanted an AI agent to help make a real object. The laser stays disconnected until the job is ready.</p>',
+              '>See how a job works</a>': '>Follow a job</a>',
+              '            View the code': '            View source',
+              '<span class="proof-label">Backend</span>': '<span class="proof-label">Runs on</span>',
+              '<strong>Real MeerK40t kernel</strong>': '<strong>MeerK40t\'s own kernel</strong>',
+              '<p>Every command runs through MeerK40t itself.</p>': '<p>The CLI calls the same engine as the app.</p>',
+              '<span class="proof-label">Default path</span>': '<span class="proof-label">Before hardware</span>',
+              '<strong>Offline first</strong>': '<strong>Build and check offline</strong>',
+              '<p>Build, export, and verify with no laser attached.</p>': '<p>The laser can stay disconnected.</p>',
+              '<span class="proof-label">Hardware check</span>': '<span class="proof-label">Used for real</span>',
+              '<strong>Live-verified on Sculpfun S9</strong>': '<strong>Engraved on a Sculpfun S9</strong>',
+              '<p class="section-kicker">From design to job</p>': '<p class="section-kicker">Why I built it</p>',
+              '<h2>From SVG to a checked laser job.</h2>': '<h2>I wanted an agent to make something I could hold.</h2>',
+              '<p>Open or build the design, choose the machine and material, then prepare the files. The manifest records what happened. Preflight checks it before the job reaches the laser.</p>': '<p>Creating the SVG was the easy part. The missing piece was getting it through MeerK40t, applying real machine and material settings, and leaving a job I could inspect before walking over to the laser.</p>',
+              '<h3>Describe</h3>': '<h3>Open or draw</h3>',
+              '<p>Open an SVG or build geometry with element commands.</p>': '<p>Load an SVG, or make the shapes with commands.</p>',
+              '<h3>Resolve</h3>': '<h3>Pick the setup</h3>',
+              '<p>Choose the machine and material profile.</p>': '<p>Choose the machine and material.</p>',
+              '<h3>Prepare</h3>': '<h3>Make the files</h3>',
+              '<p>Write a job SVG, G-code, and a manifest that records what produced them.</p>': '<p>Generate the job SVG, G-code, and manifest.</p>',
+              '<h3>Preflight</h3>': '<h3>Check the job</h3>',
+              '<p>Re-check file hashes and the settings fingerprint before the job moves on.</p>': '<p>Verify the files and settings before leaving the terminal.</p>',
+              '<h3>Frame &amp; run</h3>': '<h3>Go to the laser</h3>',
+              '<p>Connect, check origin and placement, then operate the machine in person.</p>': '<p>Connect, check the origin and placement, then run it in person.</p>',
+              '<p class="section-kicker">Real commands</p>': '<p class="section-kicker">What the CLI tells you</p>',
+              '<h2 id="terminal-title">See what the job is ready for.</h2>': '<h2 id="terminal-title">Know what is safe to do next.</h2>',
+              '<p>Prepare the files, check the manifest, then move to the hardware path. The commands are real; the sample output is representative.</p>': '<p>The output shows whether the job is ready for inspection, preflight, or an operator at the machine. The commands are real. The sample output is shortened for the page.</p>',
+              '<p>Useful for inspection and preflight. Calibrate on scrap before a real frame or burn.</p>': '<p>Files created. Inspect them now; calibrate before framing or burning.</p>',
+              '<p class="section-kicker">Before the laser</p>': '<p class="section-kicker">At the machine</p>',
+              '<h2>Calibration comes before the laser.</h2>': '<h2>Calibrate first. Then connect the laser.</h2>',
+              '<div><span>NO HARDWARE</span><h3>Safe offline work</h3></div>': '<div><span>NO HARDWARE</span><h3>Before the machine</h3></div>',
+              '<li>Resolve a machine and material profile</li>': '<li>Pick a machine and material profile</li>',
+              '<p class="lane-command"><code>--allow-estimated</code> produces files for inspection. They are not ready to burn.</p>': '<p class="lane-command">With <code>--allow-estimated</code>, the files are for inspection. Calibrate before framing or burning.</p>',
+              '<div><span>LASER CONNECTED</span><h3>Operator present</h3></div>': '<div><span>LASER CONNECTED</span><h3>At the laser</h3></div>',
+              '<p class="lane-command">Frame and run only from calibrated settings, at the machine.</p>': '<p class="lane-command">Frame and run at the machine, using calibrated settings.</p>',
+              '<p class="section-kicker">Command surface</p>': '<p class="section-kicker">Commands</p>',
+              '<h2>The MeerK40t workflow, available as commands.</h2>': '<h2>The laser workflow, one command at a time.</h2>',
+              '<p class="command-footnote">* PNG export depends on the GUI environment. G-code uses the real GRBL device pipeline.</p>': '<p class="command-footnote">* PNG still needs the GUI renderer. G-code goes through MeerK40t\'s GRBL pipeline.</p>',
+              '<p class="section-kicker">Included example</p>': '<p class="section-kicker">A real starting point</p>',
+              '<h2>Start with a complete laser-cut house.</h2>': '<h2>The repo includes the A3 house I used to test the workflow.</h2>',
+              '<p>The repository includes an A3 kraft-house design, the script that generates it, and prepared output files. Copy the folder anywhere and run preflight against its manifest.</p>': '<p>You get the design, the generator, the prepared job, G-code, and manifest. Copy the folder anywhere and run preflight without checking out the rest of the repo.</p>',
+              '<p class="section-kicker">Try it</p>': '<p class="section-kicker">Start with the example</p>',
+              '<h2>Prepare your first job offline.</h2>': '<h2>Run it. See every file the CLI makes.</h2>',
+              '<a class="button button--ghost" href="https://github.com/George-RD/cli-anything-meerk40t">View on GitHub</a>': '<a class="button button--ghost" href="https://github.com/George-RD/cli-anything-meerk40t/tree/main/examples/kraft-house">Open the example</a>',
+          })
+
+          replace_exact("docs/script.js", {
+              "note: 'Useful for inspection and preflight. Calibrate on scrap before a real frame or burn.'": "note: 'Files created. Inspect them now; calibrate before framing or burning.'",
+              "note: 'The files still match the manifest. Estimated settings remain inspection-only.'": "note: 'The files match the manifest. The settings are still estimated, so keep the laser disconnected.'",
+              "note: 'Wear rated eye protection. Confirm focus, origin, ventilation and placement before framing.'": "note: 'The controller is responding. Check focus, origin, glasses, ventilation, and placement at the machine.'",
+          })
+
+          design = Path("docs/SITE-DESIGN.md")
+          design_text = design.read_text()
+          copy_section = """
+
+          ## Copy
+
+          - Lead with the physical outcome: an SVG becoming a checked laser job.
+          - Use first person where the reason for the project matters.
+          - Prefer concrete verbs, commands, files, machines, and materials over product language.
+          - Keep safety statements blunt and specific.
+          - Avoid binary contrast formulas, stacked qualifiers, and phrases such as “agent-native”.
+          """
+          if "## Copy" not in design_text:
+              design.write_text(design_text.rstrip() + copy_section + "\n")
+          PY
+
+      - name: Validate the page
+        shell: bash
+        run: |
+          python - <<'PY'
+          from html.parser import HTMLParser
+          from pathlib import Path
+
+          class Check(HTMLParser):
+              def __init__(self):
+                  super().__init__()
+                  self.ids = []
+                  self.h1 = 0
+              def handle_starttag(self, tag, attrs):
+                  attrs = dict(attrs)
+                  if "id" in attrs:
+                      self.ids.append(attrs["id"])
+                  if tag == "h1":
+                      self.h1 += 1
+
+          html = Path("docs/index.html").read_text()
+          check = Check()
+          check.feed(html)
+          assert check.h1 == 1
+          assert len(check.ids) == len(set(check.ids))
+
+          for stale in [
+              "agent-native",
+              "powerful laser engine",
+              "Enough structure for an agent",
+              "The MeerK40t workflow, available as commands",
+              "sample output is representative",
+          ]:
+              assert stale not in html, stale
+
+          for required in [
+              "Turn an SVG into a laser job",
+              "I wanted an agent to make something I could hold",
+              "Engraved on a Sculpfun S9",
+              "Calibrate first. Then connect the laser.",
+          ]:
+              assert required in html, required
+          PY
+          node --check docs/script.js
+
+      - name: Commit the finished copy
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git rm .github/workflows/human-copy-overhaul.yml
+          git add docs/index.html docs/script.js docs/SITE-DESIGN.md
+          git commit -m "Rewrite landing page copy in a human voice [skip ci]"
+          git push
