@@ -5,17 +5,17 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="theme-color" content="#e8efe8">
   <meta name="color-scheme" content="light">
-  <title>CLI Anything × MeerK40t — Agent-native laser job preparation</title>
-  <meta name="description" content="A stateful CLI and REPL around the real MeerK40t kernel. Prepare, export, and preflight laser jobs offline, then hand control to an operator.">
+  <title>Control MeerK40t from the command line — CLI Anything</title>
+  <meta name="description" content="Build, inspect, and prepare laser jobs from a terminal or AI agent using the real MeerK40t engine.">
   <link rel="canonical" href="https://george-rd.github.io/cli-anything-meerk40t/">
   <meta property="og:type" content="website">
-  <meta property="og:title" content="CLI Anything × MeerK40t">
-  <meta property="og:description" content="Let an agent prepare the job. Keep the operator in control.">
+  <meta property="og:title" content="Control MeerK40t from the command line">
+  <meta property="og:description" content="Build, inspect, and prepare real laser jobs from a terminal or AI agent.">
   <meta property="og:url" content="https://george-rd.github.io/cli-anything-meerk40t/">
   <meta property="og:image" content="https://george-rd.github.io/cli-anything-meerk40t/og.png">
   <meta name="twitter:card" content="summary_large_image">
-  <meta name="twitter:title" content="CLI Anything × MeerK40t">
-  <meta name="twitter:description" content="Agent-native laser job preparation through the real MeerK40t kernel.">
+  <meta name="twitter:title" content="Control MeerK40t from the command line">
+  <meta name="twitter:description" content="A real CLI for building and checking MeerK40t laser jobs.">
   <meta name="twitter:image" content="https://george-rd.github.io/cli-anything-meerk40t/og.png">
   <link rel="icon" href="./favicon.svg" type="image/svg+xml">
   <link rel="manifest" href="./site.webmanifest">
@@ -27,9 +27,9 @@
 </head>
 <body>
   <!--
-  THESIS: A laser job should visibly cross from agent preparation to human operation; this refuses the generic dark terminal landing page.
+  THESIS: Show how a design becomes a checked MeerK40t job before anyone connects a laser.
   OWN-WORLD: Cool workshop stock, registration marks, cut/etch inks, clipped controls, and one moving laser head.
-  STORY: Understand the real-kernel CLI, see the offline workflow, respect the calibration boundary, then install or inspect the source.
+  STORY: Understand the CLI at a glance, follow a job from SVG to preflight, then install it or inspect the source.
   FIRST VIEWPORT: Copy and install action at left; a working A3 laser-bed dossier at right; GitHub remains visible in the header.
   FORM: Persuade surface staged as an operator job sheet, with the mechanism demonstrated before feature explanation.
   -->
@@ -66,8 +66,8 @@
     <section class="hero" id="top">
       <div class="hero-copy">
         <p class="status-line"><span class="status-pulse" aria-hidden="true"></span> v1.4.0 · real MeerK40t kernel</p>
-        <h1>Let an agent prepare the job. <em>Keep the operator in control.</em></h1>
-        <p class="hero-intro">A stateful CLI and REPL for taking a design from SVG to inspected G-code through MeerK40t itself. Most work happens offline. The laser stays behind an explicit human boundary.</p>
+        <h1>Control MeerK40t <em>from the command line.</em></h1>
+        <p class="hero-intro">MeerK40t already has a powerful laser engine. This gives it a stateful CLI, so you can build, inspect, and prepare jobs from a terminal or an AI agent. Connect the machine only when the job is ready and someone is there to run it.</p>
 
         <div class="install-stack" aria-label="Installation commands">
           <div class="install-line">
@@ -89,9 +89,9 @@
         </div>
 
         <div class="hero-actions">
-          <a class="button button--primary" href="#workflow">Trace a job</a>
+          <a class="button button--primary" href="#workflow">See how a job works</a>
           <a class="text-link" href="https://github.com/George-RD/cli-anything-meerk40t">
-            Inspect the source
+            View the code
             <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M4 10h11M11 6l4 4-4 4" fill="none" stroke="currentColor" stroke-width="1.8"/></svg>
           </a>
         </div>
@@ -204,7 +204,7 @@
       <div>
         <span class="proof-label">Backend</span>
         <strong>Real MeerK40t kernel</strong>
-        <p>Not a simulated API or a second implementation.</p>
+        <p>Every command runs through MeerK40t itself.</p>
       </div>
       <div>
         <span class="proof-label">Default path</span>
@@ -220,9 +220,9 @@
 
     <section class="mechanism" id="workflow">
       <div class="section-lead">
-        <p class="section-kicker">The mechanism</p>
-        <h2>A job crosses a boundary before the laser does.</h2>
-        <p>Agents can do the repetitive preparation. The manifest, material profile, and preflight make that work inspectable. Calibration and physical operation stay with a person at the machine.</p>
+        <p class="section-kicker">From design to job</p>
+        <h2>From SVG to a checked laser job.</h2>
+        <p>Open or build the design, choose the machine and material, then prepare the files. The manifest records what happened. Preflight checks it before the job reaches the laser.</p>
       </div>
 
       <ol class="job-flow" aria-label="Laser job workflow">
@@ -238,7 +238,7 @@
           <span class="flow-index">B</span>
           <div>
             <h3>Resolve</h3>
-            <p>Select the machine and material profile instead of hand-typing settings.</p>
+            <p>Choose the machine and material profile.</p>
             <code>--machine sculpfun-s9</code>
           </div>
         </li>
@@ -275,9 +275,9 @@
 
     <section class="terminal-lab" aria-labelledby="terminal-title">
       <div class="terminal-copy">
-        <p class="section-kicker">See the states</p>
-        <h2 id="terminal-title">The CLI says what kind of job you have.</h2>
-        <p>Switch between an offline prepare, a manifest preflight, and the operator-present hardware path. Outputs below are illustrative; the commands are real.</p>
+        <p class="section-kicker">Real commands</p>
+        <h2 id="terminal-title">See what the job is ready for.</h2>
+        <p>Prepare the files, check the manifest, then move to the hardware path. The commands are real; the sample output is representative.</p>
 
         <div class="command-tabs" role="tablist" aria-label="Command examples">
           <button type="button" role="tab" id="tab-prepare" aria-controls="command-panel" aria-selected="true" tabindex="0" data-command="prepare">Prepare</button>
@@ -313,8 +313,8 @@
 
     <section class="safety" id="safety">
       <div class="safety-heading">
-        <p class="section-kicker">Safety boundary</p>
-        <h2>Estimated is not calibrated.</h2>
+        <p class="section-kicker">Before the laser</p>
+        <h2>Calibration comes before the laser.</h2>
       </div>
 
       <div class="safety-grid">
@@ -329,7 +329,7 @@
             <li>Export job SVG and G-code for inspection</li>
             <li>Verify hashes and settings fingerprint</li>
           </ul>
-          <p class="lane-command"><code>--allow-estimated</code> acknowledges an inspection-only result. It does not make it burn-ready.</p>
+          <p class="lane-command"><code>--allow-estimated</code> produces files for inspection. They are not ready to burn.</p>
         </article>
 
         <article class="safety-lane safety-lane--operator">
@@ -350,17 +350,17 @@
       <aside class="network-warning">
         <svg viewBox="0 0 28 28" aria-hidden="true"><path d="M14 3 2.5 24h23L14 3Z" fill="none" stroke="currentColor" stroke-width="2"/><path d="M14 10v7M14 21h.01" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"/></svg>
         <div>
-          <strong>The MeerK40t console server is unauthenticated.</strong>
-          <p>Keep it bound to loopback and firewall-restricted. Request correlation is not authentication, and the port must never be exposed to the internet.</p>
+          <strong>Keep the console server on localhost.</strong>
+          <p>It has no authentication. Bind it to loopback, restrict it with a firewall, and never expose the port to the internet.</p>
         </div>
-        <a href="https://github.com/George-RD/cli-anything-meerk40t/blob/main/skills/cli-anything-meerk40t/references/gui-operation.md">Read the boundary</a>
+        <a href="https://github.com/George-RD/cli-anything-meerk40t/blob/main/skills/cli-anything-meerk40t/references/gui-operation.md">Read the safety notes</a>
       </aside>
     </section>
 
     <section class="capabilities" id="commands">
       <div class="section-lead section-lead--compact">
         <p class="section-kicker">Command surface</p>
-        <h2>Enough structure for an agent. Enough escape hatches for an operator.</h2>
+        <h2>The MeerK40t workflow, available as commands.</h2>
       </div>
 
       <dl class="command-grid">
@@ -402,8 +402,8 @@
 
       <div class="example-copy">
         <p class="section-kicker">Included example</p>
-        <h2>Not just a command list. A complete job you can inspect.</h2>
-        <p>The repository ships with an A3 kraft-house design, its generator, and prepared artifacts. Copy the example anywhere and run preflight against the relocatable manifest.</p>
+        <h2>Start with a complete laser-cut house.</h2>
+        <p>The repository includes an A3 kraft-house design, the script that generates it, and prepared output files. Copy the folder anywhere and run preflight against its manifest.</p>
         <div class="example-links">
           <a class="button button--secondary" href="https://github.com/George-RD/cli-anything-meerk40t/tree/main/examples/kraft-house">Open the kraft-house example</a>
           <a class="text-link" href="https://github.com/George-RD/cli-anything-meerk40t/blob/main/MEERK40T.md">Read the operating SOP <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M4 10h11M11 6l4 4-4 4" fill="none" stroke="currentColor" stroke-width="1.8"/></svg></a>
@@ -413,8 +413,8 @@
 
     <section class="final-cta">
       <div>
-        <p class="section-kicker">Start offline</p>
-        <h2>Build the job before you connect the machine.</h2>
+        <p class="section-kicker">Try it</p>
+        <h2>Prepare your first job offline.</h2>
       </div>
       <div class="final-actions">
         <button class="button button--primary copy-install-final" type="button" data-copy="pip install cli-anything-meerk40t">Copy install command</button>
