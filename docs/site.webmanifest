@@ -1,0 +1,17 @@
+{
+  "name": "CLI Anything × MeerK40t",
+  "short_name": "MeerK40t CLI",
+  "description": "Agent-native laser job preparation through the real MeerK40t kernel.",
+  "start_url": "./",
+  "display": "standalone",
+  "background_color": "#e8efe8",
+  "theme_color": "#e8efe8",
+  "icons": [
+    {
+      "src": "./favicon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    }
+  ]
+}
