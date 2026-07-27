@@ -1,0 +1,86 @@
+name: Apply landing page copy overhaul
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/copy-overhaul.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  rewrite:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Rewrite landing page copy
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          p = Path('docs/index.html')
+          s = p.read_text()
+          replacements = {
+            '<title>CLI Anything × MeerK40t — Agent-native laser job preparation</title>': '<title>Control MeerK40t from the command line — CLI Anything</title>',
+            '<meta name="description" content="A stateful CLI and REPL around the real MeerK40t kernel. Prepare, export, and preflight laser jobs offline, then hand control to an operator.">': '<meta name="description" content="Build, inspect, and prepare laser jobs from a terminal or AI agent using the real MeerK40t engine.">',
+            '<meta property="og:title" content="CLI Anything × MeerK40t">': '<meta property="og:title" content="Control MeerK40t from the command line">',
+            '<meta property="og:description" content="Let an agent prepare the job. Keep the operator in control.">': '<meta property="og:description" content="Build, inspect, and prepare real laser jobs from a terminal or AI agent.">',
+            '<meta name="twitter:title" content="CLI Anything × MeerK40t">': '<meta name="twitter:title" content="Control MeerK40t from the command line">',
+            '<meta name="twitter:description" content="Agent-native laser job preparation through the real MeerK40t kernel.">': '<meta name="twitter:description" content="A real CLI for building and checking MeerK40t laser jobs.">',
+            '  THESIS: A laser job should visibly cross from agent preparation to human operation; this refuses the generic dark terminal landing page.': '  THESIS: Show how a design becomes a checked MeerK40t job before anyone connects a laser.',
+            '  STORY: Understand the real-kernel CLI, see the offline workflow, respect the calibration boundary, then install or inspect the source.': '  STORY: Understand the CLI at a glance, follow a job from SVG to preflight, then install it or inspect the source.',
+            '        <h1>Let an agent prepare the job. <em>Keep the operator in control.</em></h1>': '        <h1>Control MeerK40t <em>from the command line.</em></h1>',
+            '        <p class="hero-intro">A stateful CLI and REPL for taking a design from SVG to inspected G-code through MeerK40t itself. Most work happens offline. The laser stays behind an explicit human boundary.</p>': '        <p class="hero-intro">MeerK40t already has a powerful laser engine. This gives it a stateful CLI, so you can build, inspect, and prepare jobs from a terminal or an AI agent. Connect the machine only when the job is ready and someone is there to run it.</p>',
+            '          <a class="button button--primary" href="#workflow">Trace a job</a>': '          <a class="button button--primary" href="#workflow">See how a job works</a>',
+            '            Inspect the source': '            View the code',
+            '        <p>Not a simulated API or a second implementation.</p>': '        <p>Every command runs through MeerK40t itself.</p>',
+            '        <p class="section-kicker">The mechanism</p>': '        <p class="section-kicker">From design to job</p>',
+            '        <h2>A job crosses a boundary before the laser does.</h2>': '        <h2>From SVG to a checked laser job.</h2>',
+            '        <p>Agents can do the repetitive preparation. The manifest, material profile, and preflight make that work inspectable. Calibration and physical operation stay with a person at the machine.</p>': '        <p>Open or build the design, choose the machine and material, then prepare the files. The manifest records what happened. Preflight checks it before the job reaches the laser.</p>',
+            '            <p>Select the machine and material profile instead of hand-typing settings.</p>': '            <p>Choose the machine and material profile.</p>',
+            '        <p class="section-kicker">See the states</p>': '        <p class="section-kicker">Real commands</p>',
+            '        <h2 id="terminal-title">The CLI says what kind of job you have.</h2>': '        <h2 id="terminal-title">See what the job is ready for.</h2>',
+            '        <p>Switch between an offline prepare, a manifest preflight, and the operator-present hardware path. Outputs below are illustrative; the commands are real.</p>': '        <p>Prepare the files, check the manifest, then move to the hardware path. The commands are real; the sample output is representative.</p>',
+            '        <p class="section-kicker">Safety boundary</p>': '        <p class="section-kicker">Before the laser</p>',
+            '        <h2>Estimated is not calibrated.</h2>': '        <h2>Calibration comes before the laser.</h2>',
+            '          <p class="lane-command"><code>--allow-estimated</code> acknowledges an inspection-only result. It does not make it burn-ready.</p>': '          <p class="lane-command"><code>--allow-estimated</code> produces files for inspection. They are not ready to burn.</p>',
+            '          <strong>The MeerK40t console server is unauthenticated.</strong>': '          <strong>Keep the console server on localhost.</strong>',
+            '          <p>Keep it bound to loopback and firewall-restricted. Request correlation is not authentication, and the port must never be exposed to the internet.</p>': '          <p>It has no authentication. Bind it to loopback, restrict it with a firewall, and never expose the port to the internet.</p>',
+            '>Read the boundary</a>': '>Read the safety notes</a>',
+            '        <h2>Enough structure for an agent. Enough escape hatches for an operator.</h2>': '        <h2>The MeerK40t workflow, available as commands.</h2>',
+            '        <h2>Not just a command list. A complete job you can inspect.</h2>': '        <h2>Start with a complete laser-cut house.</h2>',
+            '        <p>The repository ships with an A3 kraft-house design, its generator, and prepared artifacts. Copy the example anywhere and run preflight against the relocatable manifest.</p>': '        <p>The repository includes an A3 kraft-house design, the script that generates it, and prepared output files. Copy the folder anywhere and run preflight against its manifest.</p>',
+            '        <p class="section-kicker">Start offline</p>': '        <p class="section-kicker">Try it</p>',
+            '        <h2>Build the job before you connect the machine.</h2>': '        <h2>Prepare your first job offline.</h2>',
+          }
+          for old, new in replacements.items():
+              if old not in s:
+                  raise SystemExit(f'Missing expected copy: {old}')
+              s = s.replace(old, new)
+          p.write_text(s)
+          PY
+      - name: Validate HTML and JavaScript
+        run: |
+          python - <<'PY'
+          from html.parser import HTMLParser
+          from pathlib import Path
+          class Check(HTMLParser):
+              def __init__(self):
+                  super().__init__(); self.ids=[]; self.h1=0
+              def handle_starttag(self, tag, attrs):
+                  attrs=dict(attrs)
+                  if 'id' in attrs: self.ids.append(attrs['id'])
+                  if tag == 'h1': self.h1 += 1
+          c=Check(); c.feed(Path('docs/index.html').read_text())
+          assert len(c.ids) == len(set(c.ids))
+          assert c.h1 == 1
+          PY
+          node --check docs/script.js
+      - name: Commit copy overhaul
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add docs/index.html
+          git commit -m "Rewrite landing page copy for clarity"
+          git push
