@@ -41,3 +41,12 @@ On narrower screens, the first viewport becomes a single reading sequence: propo
 ## Accessibility
 
 Semantic landmarks and headings define the page. The command example uses a proper tablist with keyboard arrows, Home, and End. Controls have strong focus states. Text and large display type meet contrast requirements. Copy feedback is announced through a live region. Decorative diagram elements are hidden from assistive technology.
+
+## Copy
+
+- Lead with the physical outcome: an SVG becoming a checked laser job.
+- Use first person where the reason for the project matters.
+- Prefer concrete verbs, commands, files, machines, and materials over product language.
+- Keep safety statements blunt and specific.
+- Avoid binary contrast formulas, stacked qualifiers, and phrases such as “agent-native”.
+

@@ -17,7 +17,7 @@
   ]
 }`,
       tag: 'ESTIMATED',
-      note: 'Useful for inspection and preflight. Calibrate on scrap before a real frame or burn.'
+      note: 'Files created. Inspect them now; calibrate before framing or burning.'
     },
     preflight: {
       tabId: 'tab-preflight',
@@ -31,7 +31,7 @@
   "operator_required": false
 }`,
       tag: 'VERIFIED',
-      note: 'The files still match the manifest. Estimated settings remain inspection-only.'
+      note: 'The files match the manifest. The settings are still estimated, so keep the laser disconnected.'
     },
     hardware: {
       tabId: 'tab-hardware',
@@ -45,7 +45,7 @@
   "operator_required": true
 }`,
       tag: 'OPERATOR',
-      note: 'Wear rated eye protection. Confirm focus, origin, ventilation and placement before framing.'
+      note: 'The controller is responding. Check focus, origin, glasses, ventilation, and placement at the machine.'
     }
   };
 
