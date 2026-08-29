@@ -4,8 +4,6 @@ from __future__ import annotations
 import json
 import uuid
 
-import pytest
-
 from cli_anything.meerk40t.core import device as device_core
 from cli_anything.meerk40t.utils.attach_envelope import FRAME_PREFIX, encode_request
 from cli_anything.meerk40t.utils.meerk40t_backend import Meerk40tBackend
