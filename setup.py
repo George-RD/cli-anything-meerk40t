@@ -26,7 +26,7 @@ setup(
     install_requires=[
         "click>=8.0",
         "prompt_toolkit>=3.0",
-        "meerk40t>=0.9.8230,<=0.9.9100",
+        "meerk40t>=0.9.8220,<=0.9.9100",
         # Headless deps that meerk40t's setup.py only puts in extras.
         # Without these, GRBL websocket, DXF, and image features break.
         "pyusb>=1.0.0",

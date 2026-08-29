@@ -21,6 +21,7 @@ jobs:
       fail-fast: false
       matrix:
         meerk40t-version:
+          - "0.9.8220"
           - "0.9.8230"
           - "0.9.8930"
           - "0.9.9000"

@@ -18,10 +18,10 @@ changes.
 
 ## Decision
 - The supported released-runtime window is
-  `meerk40t>=0.9.8230,<=0.9.9100`. Every published release in that closed
-  interval (`0.9.8230`, `0.9.8930`, `0.9.9000`, `0.9.9100`) is exact-pinned and
-  exercised by required CI. A failure in any supported-release lane blocks the
-  change.
+  `meerk40t>=0.9.8220,<=0.9.9100`. Every published release in that closed
+  interval (`0.9.8220`, `0.9.8230`, `0.9.8930`, `0.9.9000`, `0.9.9100`) is
+  exact-pinned and exercised by required CI. A failure in any supported-release
+  lane blocks the change.
 - The package dependency uses the same closed interval. A future MeerK40t
   release is not accepted by the resolver until it has passed the released
   compatibility gate and this decision is deliberately updated.

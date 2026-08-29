@@ -37,14 +37,14 @@ Released compatibility is not inferred from the dependency resolver. Required
 CI exact-pins every release in the supported window:
 
 ```text
-meerk40t>=0.9.8230,<=0.9.9100
+meerk40t>=0.9.8220,<=0.9.9100
 ```
 
-The required matrix is `0.9.8230`, `0.9.8930`, `0.9.9000`, and `0.9.9100`.
-For each release, `.github/workflows/compatibility.yml` runs the canonical
-integration-seam tests and the behavioral gate above. Current upstream `main`
-runs the same checks in a non-blocking informational lane. The rationale,
-probe evidence, and process for changing the window are in
+The required matrix is `0.9.8220`, `0.9.8230`, `0.9.8930`, `0.9.9000`, and
+`0.9.9100`. For each release, `.github/workflows/compatibility.yml` runs the
+canonical integration-seam tests and the behavioral gate above. Current
+upstream `main` runs the same checks in a non-blocking informational lane. The
+rationale, probe evidence, and process for changing the window are in
 [`docs/compatibility.md`](../../../docs/compatibility.md).
 
 ## Current-release clean-install invariant (regression guard for #51)

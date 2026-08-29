@@ -10,13 +10,14 @@ The CI policy behind it is recorded in
 The supported release window is:
 
 ```text
-meerk40t>=0.9.8230,<=0.9.9100
+meerk40t>=0.9.8220,<=0.9.9100
 ```
 
 The releases in that window are currently:
 
 | MeerK40t | Required CI | Evidence |
 |---|---:|---|
+| `0.9.8220` | yes | canonical integration seam + 340-test behavioral gate pass |
 | `0.9.8230` | yes | canonical integration seam + 340-test behavioral gate pass |
 | `0.9.8930` | yes | canonical integration seam + behavioral gate pass |
 | `0.9.9000` | yes | canonical integration seam + behavioral gate pass |
@@ -35,16 +36,16 @@ well as the supported tail:
 - `0.9.1000` failed the canonical seam while booting the real kernel because
   `meerk40t.extra.coolant` does not exist in that release.
 - `0.9.3001` failed at the same missing native module boundary.
-- `0.9.8230`, `0.9.8930`, and `0.9.9000` completed the required seam and
-  behavioral gates; `0.9.9100` is retained as the current-release clean-install
-  invariant and required matrix endpoint.
-- Candidate releases between `0.9.3001` and `0.9.8230` were exploratory and do
-  not expand the declared support window. Supporting them later requires a
-  deliberate compatibility change backed by a complete required gate.
+- `0.9.8220`, `0.9.8230`, `0.9.8930`, `0.9.9000`, and `0.9.9100` completed the
+  required seam and behavioral gates.
+- Earlier candidates that reached the seam did not establish a lower support
+  floor: the behavioral probes were materially slower and the published
+  releases between those samples were not all exercised.
 
-The floor is therefore conservative: it is the first release in a contiguous
-published tail for which every release through current is part of the required
-contract. We do not infer support from version ordering alone.
+The floor is therefore evidence-based and conservative: `0.9.8220` is the
+lowest release in a contiguous published tail for which every release through
+current is covered by a complete required gate. We do not infer support from
+version ordering or from a seam-only pass.
 
 ## Upstream early warning
 
