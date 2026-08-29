@@ -21,47 +21,34 @@ import time
 import threading
 
 from cli_anything.meerk40t.utils.meerk40t_backend import Meerk40tBackend
+from cli_anything.meerk40t.utils.meerk40t_integration import MeerK40tIntegration
 from cli_anything.meerk40t.utils import serial_probe
 
 _LIST_ECHO = "device"
 
 
-def _active_info(dev):
-    """Build a status dict for the active device, or None when absent."""
-    if dev is None:
+def _active_info(snapshot):
+    """Map canonical integration facts into the existing CLI status shape."""
+    if not isinstance(snapshot, dict):
+        snapshot = MeerK40tIntegration.from_device(snapshot).status_snapshot()
+    if snapshot["device"] is None:
         return None
     info = {
-        "device": str(dev),
-        "type": getattr(dev, "name", None),
-        "label": getattr(dev, "label", None),
+        "device": snapshot["device"],
+        "type": snapshot["type"],
+        "label": snapshot["label"],
     }
-    if hasattr(dev, "serial_port"):
-        info["port"] = getattr(dev, "serial_port", None)
-    if hasattr(dev, "baud_rate"):
-        info["baud"] = getattr(dev, "baud_rate", None)
-    controller = getattr(dev, "controller", None)
-    conn = getattr(controller, "connection", None) if controller is not None else None
-    info["connected"] = _connection_state(conn)
+    if snapshot["has_serial_port"]:
+        info["port"] = snapshot["serial_port"]
+    if snapshot["has_baud_rate"]:
+        info["baud"] = snapshot["baud"]
+    info["connected"] = snapshot["connected"]
     return info
 
-def _connection_state(conn):
-    """Resolve a device connection's live state across MeerK40t drivers.
 
-    GRBL and the dummy device expose a boolean ``connected`` attribute, while
-    Lihuiyu controllers expose ``is_connected()``. Read whichever is present so
-    ``device status``/``device connect`` report the real state instead of a
-    false disconnected status for the advertised Lihuiyu hardware path.
-    """
-    if conn is None:
-        return False
-    connected = getattr(conn, "connected", None)
-    if isinstance(connected, bool):
-        return connected
-    if callable(getattr(conn, "is_connected", None)):
-        return bool(conn.is_connected())
-    if isinstance(connected, int):
-        return bool(connected)
-    return bool(connected)
+def _connection_state(conn):
+    """Keep legacy motion callers on the seam until their roadmap slice."""
+    return MeerK40tIntegration.connection_state(conn)
 
 
 def _parse_position(lines):
@@ -100,36 +87,33 @@ def _parse_position(lines):
 
 
 def list_devices(backend):
-    """List the available device providers via the ``device`` console command.
-
-    The ``device`` console command is defined in
-    ``meerk40t/device/basedevice.py`` and prints the registered device
-    entries (provider registry). The active device is reported separately.
-    """
+    """List providers and the active device through the shared status seam."""
     out = backend.run(_LIST_ECHO)
     lines = [l for l in out if l.strip() and not l.strip().startswith(_LIST_ECHO)]
-    return {"devices": lines, "active": _active_info(backend.device())}
+    snapshot = MeerK40tIntegration.from_backend(backend).status_snapshot()
+    return {"devices": lines, "active": _active_info(snapshot)}
 
 
 def device_status(backend):
-    """Show the active device's status (position + connection state)."""
+    """Show active-device status using canonical MeerK40t integration facts."""
     pos = None
     try:
         out = backend.run("devinfo")
         pos = _parse_position(out)
     except Exception:
-        out = None
-    info = _active_info(backend.device())
+        pass
+    snapshot = MeerK40tIntegration.from_backend(backend).status_snapshot()
+    info = _active_info(snapshot)
     result = {"position": pos}
     if info:
         result.update(info)
     else:
-        result["device"] = str(backend.device())
+        result["device"] = "None"
     return result
 
 
 def device_info(backend):
-    """Show raw device info plus parsed position and connection state."""
+    """Show raw device info plus seam-backed status facts and parsed position."""
     raw = []
     pos = None
     try:
@@ -137,7 +121,8 @@ def device_info(backend):
         pos = _parse_position(raw)
     except Exception:
         pass
-    info = _active_info(backend.device())
+    snapshot = MeerK40tIntegration.from_backend(backend).status_snapshot()
+    info = _active_info(snapshot)
     result = {"raw": raw, "position": pos}
     if info:
         result.update(info)
@@ -220,11 +205,12 @@ def move(backend, x, y, absolute=True):
     }
 
 
-def _connect_result(dev):
+def _connect_result(backend):
     """Return a status dict after an open/close attempt."""
-    info = _active_info(dev)
+    snapshot = MeerK40tIntegration.from_backend(backend).status_snapshot()
+    info = _active_info(snapshot)
     if info is None:
-        info = {"connected": False, "device": str(dev)}
+        info = {"connected": False, "device": "None"}
     return info
 
 
@@ -249,7 +235,7 @@ def connect(backend):
     try:
         controller.open()
     except Exception as exc:  # pragma: no cover - serial failure surfaced to caller
-        info = _connect_result(dev)
+        info = _connect_result(backend)
         info["connected"] = False
         info["error"] = str(exc)
         return info
@@ -258,7 +244,7 @@ def connect(backend):
     # propagated, so open() can return with the connection still closed.
     # Surface that as an error instead of returning a clean status shape.
     # A genuinely open connection keeps the success shape unchanged.
-    info = _connect_result(dev)
+    info = _connect_result(backend)
     if not info.get("connected"):
         port = info.get("port")
         suffix = f" (port={port})" if port else ""
@@ -282,10 +268,10 @@ def disconnect(backend):
     try:
         controller.close()
     except Exception as exc:  # pragma: no cover - surfaced to caller
-        info = _connect_result(dev)
+        info = _connect_result(backend)
         info["error"] = str(exc)
         return info
-    return _connect_result(dev)
+    return _connect_result(backend)
 
 
 # ── Port discovery and preflight ────────────────────────────────────────────
