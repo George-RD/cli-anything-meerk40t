@@ -1,0 +1,960 @@
+.......F................................................................ [ 17%]
+...FFFFFF......................................................... [ 32%]
+........................................................................ [ 50%]
+.....................FFFFFF.FFFF.FFFF.FFFF.............................. [ 67%]
+........................................................................ [ 84%]
+.................................................................        [100%]
+=================================== FAILURES ===================================
+__________ TestDevice.test_active_info_reads_is_connected_for_lihuiyu __________
+
+self = <test_core.TestDevice testMethod=test_active_info_reads_is_connected_for_lihuiyu>
+
+    def test_active_info_reads_is_connected_for_lihuiyu(self):
+        # Lihuiyu controllers expose is_connected() rather than a boolean
+        # connected attribute; device status must report the real state.
+        class _Conn:
+            def is_connected(self):
+                return True
+    
+        class _Controller:
+            connection = _Conn()
+    
+        class _Dev:
+            label = "Fake"
+    
+            def __init__(self):
+                self.controller = _Controller()
+    
+>       info = device_mod._active_info(_Dev())
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+cli_anything/meerk40t/tests/test_core.py:192: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+snapshot = <test_core.TestDevice.test_active_info_reads_is_connected_for_lihuiyu.<locals>._Dev object at 0x7f4ba41b3110>
+
+    def _active_info(snapshot):
+        """Map canonical integration facts into the existing CLI status shape."""
+>       if snapshot["device"] is None:
+           ^^^^^^^^^^^^^^^^^^
+E       TypeError: '_Dev' object is not subscriptable
+
+cli_anything/meerk40t/core/device.py:32: TypeError
+----------------------------- Captured stdout call -----------------------------
+[0m[16:21:51] [34m[1mservice device start dummy 0[0m
+______________ TestFrameCornerMath.test_frame_traces_five_corners ______________
+
+self = <test_core.TestFrameCornerMath testMethod=test_frame_traces_five_corners>
+
+    def test_frame_traces_five_corners(self):
+        backend, controller = self._live_backend()
+>       res = device_mod.frame(backend, 10.0, 20.0, 30.0, 40.0, feed=1500)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+cli_anything/meerk40t/tests/test_core.py:870: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+cli_anything/meerk40t/core/device.py:725: in frame
+    controller, err = _require_live_connection(backend)
+                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+backend = <test_core.Backend object at 0x7f4ba45bbd10>
+
+    def _require_live_connection(backend):
+        """Return ``(controller, None)`` when a writable live link exists, else
+        ``(None, error_dict)``. Jog/goto/frame must refuse without a connection."""
+        dev = backend.device()
+        if dev is None:
+            return None, {"error": "no active device", "connected": False}
+        controller = getattr(dev, "controller", None)
+        if controller is None or not hasattr(controller, "write"):
+            return None, {
+                "error": "active device has no writable controller",
+                "connected": False,
+            }
+        conn = getattr(controller, "connection", None)
+>       if not _connection_state(conn):
+               ^^^^^^^^^^^^^^^^^
+E       NameError: name '_connection_state' is not defined
+
+cli_anything/meerk40t/core/device.py:534: NameError
+_____________ TestJogExactStrings.test_frame_emits_absolute_words ______________
+
+self = <test_core.TestJogExactStrings testMethod=test_frame_emits_absolute_words>
+
+    def test_frame_emits_absolute_words(self):
+        backend, controller = self._backend()
+>       res = device_mod.frame(backend, 10.0, 20.0, 30.0, 40.0, feed=1500)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+cli_anything/meerk40t/tests/test_core.py:962: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+cli_anything/meerk40t/core/device.py:725: in frame
+    controller, err = _require_live_connection(backend)
+                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+backend = <test_core.Backend object at 0x7f4ba43bae10>
+
+    def _require_live_connection(backend):
+        """Return ``(controller, None)`` when a writable live link exists, else
+        ``(None, error_dict)``. Jog/goto/frame must refuse without a connection."""
+        dev = backend.device()
+        if dev is None:
+            return None, {"error": "no active device", "connected": False}
+        controller = getattr(dev, "controller", None)
+        if controller is None or not hasattr(controller, "write"):
+            return None, {
+                "error": "active device has no writable controller",
+                "connected": False,
+            }
+        conn = getattr(controller, "connection", None)
+>       if not _connection_state(conn):
+               ^^^^^^^^^^^^^^^^^
+E       NameError: name '_connection_state' is not defined
+
+cli_anything/meerk40t/core/device.py:534: NameError
+______________ TestJogExactStrings.test_goto_emits_absolute_word _______________
+
+self = <test_core.TestJogExactStrings testMethod=test_goto_emits_absolute_word>
+
+    def test_goto_emits_absolute_word(self):
+        backend, controller = self._backend()
+>       res = device_mod.goto(backend, 0.0, 0.0, feed=3000)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+cli_anything/meerk40t/tests/test_core.py:954: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+cli_anything/meerk40t/core/device.py:698: in goto
+    controller, err = _require_live_connection(backend)
+                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+backend = <test_core.Backend object at 0x7f4ba43ee350>
+
+    def _require_live_connection(backend):
+        """Return ``(controller, None)`` when a writable live link exists, else
+        ``(None, error_dict)``. Jog/goto/frame must refuse without a connection."""
+        dev = backend.device()
+        if dev is None:
+            return None, {"error": "no active device", "connected": False}
+        controller = getattr(dev, "controller", None)
+        if controller is None or not hasattr(controller, "write"):
+            return None, {
+                "error": "active device has no writable controller",
+                "connected": False,
+            }
+        conn = getattr(controller, "connection", None)
+>       if not _connection_state(conn):
+               ^^^^^^^^^^^^^^^^^
+E       NameError: name '_connection_state' is not defined
+
+cli_anything/meerk40t/core/device.py:534: NameError
+_______________ TestJogExactStrings.test_jog_emits_relative_word _______________
+
+self = <test_core.TestJogExactStrings testMethod=test_jog_emits_relative_word>
+
+    def test_jog_emits_relative_word(self):
+        backend, controller = self._backend()
+>       res = device_mod.jog(backend, 10.0, 10.0, feed=600)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+cli_anything/meerk40t/tests/test_core.py:944: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+cli_anything/meerk40t/core/device.py:674: in jog
+    controller, err = _require_live_connection(backend)
+                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+backend = <test_core.Backend object at 0x7f4ba6298b50>
+
+    def _require_live_connection(backend):
+        """Return ``(controller, None)`` when a writable live link exists, else
+        ``(None, error_dict)``. Jog/goto/frame must refuse without a connection."""
+        dev = backend.device()
+        if dev is None:
+            return None, {"error": "no active device", "connected": False}
+        controller = getattr(dev, "controller", None)
+        if controller is None or not hasattr(controller, "write"):
+            return None, {
+                "error": "active device has no writable controller",
+                "connected": False,
+            }
+        conn = getattr(controller, "connection", None)
+>       if not _connection_state(conn):
+               ^^^^^^^^^^^^^^^^^
+E       NameError: name '_connection_state' is not defined
+
+cli_anything/meerk40t/core/device.py:534: NameError
+_____________ TestJogExactStrings.test_jog_reports_error_response ______________
+
+self = <test_core.TestJogExactStrings testMethod=test_jog_reports_error_response>
+
+    def test_jog_reports_error_response(self):
+        backend, controller = self._backend(reply="error:9")
+>       res = device_mod.jog(backend, 10.0, 10.0, feed=600)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+cli_anything/meerk40t/tests/test_core.py:971: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+cli_anything/meerk40t/core/device.py:674: in jog
+    controller, err = _require_live_connection(backend)
+                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+backend = <test_core.Backend object at 0x7f4ba6bc7250>
+
+    def _require_live_connection(backend):
+        """Return ``(controller, None)`` when a writable live link exists, else
+        ``(None, error_dict)``. Jog/goto/frame must refuse without a connection."""
+        dev = backend.device()
+        if dev is None:
+            return None, {"error": "no active device", "connected": False}
+        controller = getattr(dev, "controller", None)
+        if controller is None or not hasattr(controller, "write"):
+            return None, {
+                "error": "active device has no writable controller",
+                "connected": False,
+            }
+        conn = getattr(controller, "connection", None)
+>       if not _connection_state(conn):
+               ^^^^^^^^^^^^^^^^^
+E       NameError: name '_connection_state' is not defined
+
+cli_anything/meerk40t/core/device.py:534: NameError
+__________ TestJogExactStrings.test_jog_unacknowledged_without_reply ___________
+
+self = <test_core.TestJogExactStrings testMethod=test_jog_unacknowledged_without_reply>
+
+    def test_jog_unacknowledged_without_reply(self):
+        # No recv reply (e.g. no hardware): must not claim success.
+        backend, controller = self._backend(reply=None)
+>       res = device_mod.jog(backend, 10.0, 10.0, feed=600)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+cli_anything/meerk40t/tests/test_core.py:979: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+cli_anything/meerk40t/core/device.py:674: in jog
+    controller, err = _require_live_connection(backend)
+                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+backend = <test_core.Backend object at 0x7f4ba594a7d0>
+
+    def _require_live_connection(backend):
+        """Return ``(controller, None)`` when a writable live link exists, else
+        ``(None, error_dict)``. Jog/goto/frame must refuse without a connection."""
+        dev = backend.device()
+        if dev is None:
+            return None, {"error": "no active device", "connected": False}
+        controller = getattr(dev, "controller", None)
+        if controller is None or not hasattr(controller, "write"):
+            return None, {
+                "error": "active device has no writable controller",
+                "connected": False,
+            }
+        conn = getattr(controller, "connection", None)
+>       if not _connection_state(conn):
+               ^^^^^^^^^^^^^^^^^
+E       NameError: name '_connection_state' is not defined
+
+cli_anything/meerk40t/core/device.py:534: NameError
+______________ TestMotionAckRegression.test_alarm_reply_rejected _______________
+
+self = <test_core.TestMotionAckRegression testMethod=test_alarm_reply_rejected>
+
+    def test_alarm_reply_rejected(self):
+        backend, ctrl = self._live_backend(replies="<Alarm:1|WPos:0,0,0>")
+>       res = device_mod.jog(backend, 1.0, 1.0)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+cli_anything/meerk40t/tests/test_core.py:3962: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+cli_anything/meerk40t/core/device.py:674: in jog
+    controller, err = _require_live_connection(backend)
+                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+backend = <test_core.B object at 0x7f4ba47ad550>
+
+    def _require_live_connection(backend):
+        """Return ``(controller, None)`` when a writable live link exists, else
+        ``(None, error_dict)``. Jog/goto/frame must refuse without a connection."""
+        dev = backend.device()
+        if dev is None:
+            return None, {"error": "no active device", "connected": False}
+        controller = getattr(dev, "controller", None)
+        if controller is None or not hasattr(controller, "write"):
+            return None, {
+                "error": "active device has no writable controller",
+                "connected": False,
+            }
+        conn = getattr(controller, "connection", None)
+>       if not _connection_state(conn):
+               ^^^^^^^^^^^^^^^^^
+E       NameError: name '_connection_state' is not defined
+
+cli_anything/meerk40t/core/device.py:534: NameError
+____________ TestMotionAckRegression.test_bare_alarm_push_rejected _____________
+
+self = <test_core.TestMotionAckRegression testMethod=test_bare_alarm_push_rejected>
+
+    def test_bare_alarm_push_rejected(self):
+        # Real GRBL 1.1 emits a bare "ALARM:N" push on a triggered alarm,
+        # distinct from the <Alarm:...> status form. It must still be rejected.
+        backend, ctrl = self._live_backend(replies="ALARM:1")
+>       res = device_mod.jog(backend, 1.0, 1.0)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+cli_anything/meerk40t/tests/test_core.py:3969: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+cli_anything/meerk40t/core/device.py:674: in jog
+    controller, err = _require_live_connection(backend)
+                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+backend = <test_core.B object at 0x7f4bb7057b10>
+
+    def _require_live_connection(backend):
+        """Return ``(controller, None)`` when a writable live link exists, else
+        ``(None, error_dict)``. Jog/goto/frame must refuse without a connection."""
+        dev = backend.device()
+        if dev is None:
+            return None, {"error": "no active device", "connected": False}
+        controller = getattr(dev, "controller", None)
+        if controller is None or not hasattr(controller, "write"):
+            return None, {
+                "error": "active device has no writable controller",
+                "connected": False,
+            }
+        conn = getattr(controller, "connection", None)
+>       if not _connection_state(conn):
+               ^^^^^^^^^^^^^^^^^
+E       NameError: name '_connection_state' is not defined
+
+cli_anything/meerk40t/core/device.py:534: NameError
+______________ TestMotionAckRegression.test_check_state_rejected _______________
+
+self = <test_core.TestMotionAckRegression testMethod=test_check_state_rejected>
+
+    def test_check_state_rejected(self):
+        backend, ctrl = self._live_backend(replies="<Check>")
+>       res = device_mod.jog(backend, 1.0, 1.0)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+cli_anything/meerk40t/tests/test_core.py:3996: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+cli_anything/meerk40t/core/device.py:674: in jog
+    controller, err = _require_live_connection(backend)
+                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+backend = <test_core.B object at 0x7f4bb70431d0>
+
+    def _require_live_connection(backend):
+        """Return ``(controller, None)`` when a writable live link exists, else
+        ``(None, error_dict)``. Jog/goto/frame must refuse without a connection."""
+        dev = backend.device()
+        if dev is None:
+            return None, {"error": "no active device", "connected": False}
+        controller = getattr(dev, "controller", None)
+        if controller is None or not hasattr(controller, "write"):
+            return None, {
+                "error": "active device has no writable controller",
+                "connected": False,
+            }
+        conn = getattr(controller, "connection", None)
+>       if not _connection_state(conn):
+               ^^^^^^^^^^^^^^^^^
+E       NameError: name '_connection_state' is not defined
+
+cli_anything/meerk40t/core/device.py:534: NameError
+_______________ TestMotionAckRegression.test_door_state_rejected _______________
+
+self = <test_core.TestMotionAckRegression testMethod=test_door_state_rejected>
+
+    def test_door_state_rejected(self):
+        backend, ctrl = self._live_backend(replies="<Door:1|WPos:0,0,0>")
+>       res = device_mod.jog(backend, 1.0, 1.0)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+cli_anything/meerk40t/tests/test_core.py:3990: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+cli_anything/meerk40t/core/device.py:674: in jog
+    controller, err = _require_live_connection(backend)
+                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+backend = <test_core.B object at 0x7f4ba5944390>
+
+    def _require_live_connection(backend):
+        """Return ``(controller, None)`` when a writable live link exists, else
+        ``(None, error_dict)``. Jog/goto/frame must refuse without a connection."""
+        dev = backend.device()
+        if dev is None:
+            return None, {"error": "no active device", "connected": False}
+        controller = getattr(dev, "controller", None)
+        if controller is None or not hasattr(controller, "write"):
+            return None, {
+                "error": "active device has no writable controller",
+                "connected": False,
+            }
+        conn = getattr(controller, "connection", None)
+>       if not _connection_state(conn):
+               ^^^^^^^^^^^^^^^^^
+E       NameError: name '_connection_state' is not defined
+
+cli_anything/meerk40t/core/device.py:534: NameError
+___________________ TestMotionAckRegression.test_error_reply ___________________
+
+self = <test_core.TestMotionAckRegression testMethod=test_error_reply>
+
+    def test_error_reply(self):
+        backend, ctrl = self._live_backend(replies="error:9")
+>       res = device_mod.jog(backend, 1.0, 1.0)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+cli_anything/meerk40t/tests/test_core.py:3956: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+cli_anything/meerk40t/core/device.py:674: in jog
+    controller, err = _require_live_connection(backend)
+                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+backend = <test_core.B object at 0x7f4ba4627250>
+
+    def _require_live_connection(backend):
+        """Return ``(controller, None)`` when a writable live link exists, else
+        ``(None, error_dict)``. Jog/goto/frame must refuse without a connection."""
+        dev = backend.device()
+        if dev is None:
+            return None, {"error": "no active device", "connected": False}
+        controller = getattr(dev, "controller", None)
+        if controller is None or not hasattr(controller, "write"):
+            return None, {
+                "error": "active device has no writable controller",
+                "connected": False,
+            }
+        conn = getattr(controller, "connection", None)
+>       if not _connection_state(conn):
+               ^^^^^^^^^^^^^^^^^
+E       NameError: name '_connection_state' is not defined
+
+cli_anything/meerk40t/core/device.py:534: NameError
+_______ TestMotionAckRegression.test_frame_aborts_on_first_failed_corner _______
+
+self = <test_core.TestMotionAckRegression testMethod=test_frame_aborts_on_first_failed_corner>
+
+    def test_frame_aborts_on_first_failed_corner(self):
+        def reply_for(line, idx):
+            return "error:9" if idx == 1 else "ok"
+        backend, ctrl = self._live_backend(replies=reply_for)
+>       res = device_mod.frame(backend, 10.0, 20.0, 30.0, 40.0, feed=1500)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+cli_anything/meerk40t/tests/test_core.py:4017: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+cli_anything/meerk40t/core/device.py:725: in frame
+    controller, err = _require_live_connection(backend)
+                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+backend = <test_core.B object at 0x7f4ba690a410>
+
+    def _require_live_connection(backend):
+        """Return ``(controller, None)`` when a writable live link exists, else
+        ``(None, error_dict)``. Jog/goto/frame must refuse without a connection."""
+        dev = backend.device()
+        if dev is None:
+            return None, {"error": "no active device", "connected": False}
+        controller = getattr(dev, "controller", None)
+        if controller is None or not hasattr(controller, "write"):
+            return None, {
+                "error": "active device has no writable controller",
+                "connected": False,
+            }
+        conn = getattr(controller, "connection", None)
+>       if not _connection_state(conn):
+               ^^^^^^^^^^^^^^^^^
+E       NameError: name '_connection_state' is not defined
+
+cli_anything/meerk40t/core/device.py:534: NameError
+______ TestMotionAckRegression.test_grbl_lifecycle_connected_acknowledges ______
+
+self = <test_core.TestMotionAckRegression testMethod=test_grbl_lifecycle_connected_acknowledges>
+
+    def test_grbl_lifecycle_connected_acknowledges(self):
+        backend, ctrl = self._live_backend(replies="ok", connected=True)
+>       res = device_mod.jog(backend, 1.0, 1.0)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+cli_anything/meerk40t/tests/test_core.py:3899: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+cli_anything/meerk40t/core/device.py:674: in jog
+    controller, err = _require_live_connection(backend)
+                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+backend = <test_core.B object at 0x7f4ba650b290>
+
+    def _require_live_connection(backend):
+        """Return ``(controller, None)`` when a writable live link exists, else
+        ``(None, error_dict)``. Jog/goto/frame must refuse without a connection."""
+        dev = backend.device()
+        if dev is None:
+            return None, {"error": "no active device", "connected": False}
+        controller = getattr(dev, "controller", None)
+        if controller is None or not hasattr(controller, "write"):
+            return None, {
+                "error": "active device has no writable controller",
+                "connected": False,
+            }
+        conn = getattr(controller, "connection", None)
+>       if not _connection_state(conn):
+               ^^^^^^^^^^^^^^^^^
+E       NameError: name '_connection_state' is not defined
+
+cli_anything/meerk40t/core/device.py:534: NameError
+_______________ TestMotionAckRegression.test_hold_state_rejected _______________
+
+self = <test_core.TestMotionAckRegression testMethod=test_hold_state_rejected>
+
+    def test_hold_state_rejected(self):
+        backend, ctrl = self._live_backend(replies="<Hold:0|WPos:0,0,0>")
+>       res = device_mod.jog(backend, 1.0, 1.0)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+cli_anything/meerk40t/tests/test_core.py:3984: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+cli_anything/meerk40t/core/device.py:674: in jog
+    controller, err = _require_live_connection(backend)
+                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+backend = <test_core.B object at 0x7f4ba478e5d0>
+
+    def _require_live_connection(backend):
+        """Return ``(controller, None)`` when a writable live link exists, else
+        ``(None, error_dict)``. Jog/goto/frame must refuse without a connection."""
+        dev = backend.device()
+        if dev is None:
+            return None, {"error": "no active device", "connected": False}
+        controller = getattr(dev, "controller", None)
+        if controller is None or not hasattr(controller, "write"):
+            return None, {
+                "error": "active device has no writable controller",
+                "connected": False,
+            }
+        conn = getattr(controller, "connection", None)
+>       if not _connection_state(conn):
+               ^^^^^^^^^^^^^^^^^
+E       NameError: name '_connection_state' is not defined
+
+cli_anything/meerk40t/core/device.py:534: NameError
+__________ TestMotionAckRegression.test_home_acknowledged_via_spooler __________
+
+self = <test_core.TestMotionAckRegression testMethod=test_home_acknowledged_via_spooler>
+
+    def test_home_acknowledged_via_spooler(self):
+        backend, ctrl = self._spooler_backend(spooler_idle=True)
+>       res = device_mod.home(backend)
+              ^^^^^^^^^^^^^^^^^^^^^^^^
+
+cli_anything/meerk40t/tests/test_core.py:4026: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+cli_anything/meerk40t/core/device.py:152: in home
+    controller, err = _require_live_connection(backend)
+                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+backend = <test_core.B object at 0x7f4ba6294950>
+
+    def _require_live_connection(backend):
+        """Return ``(controller, None)`` when a writable live link exists, else
+        ``(None, error_dict)``. Jog/goto/frame must refuse without a connection."""
+        dev = backend.device()
+        if dev is None:
+            return None, {"error": "no active device", "connected": False}
+        controller = getattr(dev, "controller", None)
+        if controller is None or not hasattr(controller, "write"):
+            return None, {
+                "error": "active device has no writable controller",
+                "connected": False,
+            }
+        conn = getattr(controller, "connection", None)
+>       if not _connection_state(conn):
+               ^^^^^^^^^^^^^^^^^
+E       NameError: name '_connection_state' is not defined
+
+cli_anything/meerk40t/core/device.py:534: NameError
+___ TestMotionAckRegression.test_home_indeterminate_when_spooler_never_idles ___
+
+self = <test_core.TestMotionAckRegression testMethod=test_home_indeterminate_when_spooler_never_idles>
+
+    def test_home_indeterminate_when_spooler_never_idles(self):
+        backend, ctrl = self._spooler_backend(spooler_idle=False)
+>       res = device_mod.home(backend)
+              ^^^^^^^^^^^^^^^^^^^^^^^^
+
+cli_anything/meerk40t/tests/test_core.py:4031: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+cli_anything/meerk40t/core/device.py:152: in home
+    controller, err = _require_live_connection(backend)
+                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+backend = <test_core.B object at 0x7f4ba479df50>
+
+    def _require_live_connection(backend):
+        """Return ``(controller, None)`` when a writable live link exists, else
+        ``(None, error_dict)``. Jog/goto/frame must refuse without a connection."""
+        dev = backend.device()
+        if dev is None:
+            return None, {"error": "no active device", "connected": False}
+        controller = getattr(dev, "controller", None)
+        if controller is None or not hasattr(controller, "write"):
+            return None, {
+                "error": "active device has no writable controller",
+                "connected": False,
+            }
+        conn = getattr(controller, "connection", None)
+>       if not _connection_state(conn):
+               ^^^^^^^^^^^^^^^^^
+E       NameError: name '_connection_state' is not defined
+
+cli_anything/meerk40t/core/device.py:534: NameError
+________ TestMotionAckRegression.test_interleaved_status_indeterminate _________
+
+self = <test_core.TestMotionAckRegression testMethod=test_interleaved_status_indeterminate>
+
+    def test_interleaved_status_indeterminate(self):
+        backend, ctrl = self._live_backend(replies=["<Idle|WPos:0,0,0>"])
+>       res = device_mod.jog(backend, 1.0, 1.0)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+cli_anything/meerk40t/tests/test_core.py:3949: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+cli_anything/meerk40t/core/device.py:674: in jog
+    controller, err = _require_live_connection(backend)
+                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+backend = <test_core.B object at 0x7f4ba58d0d90>
+
+    def _require_live_connection(backend):
+        """Return ``(controller, None)`` when a writable live link exists, else
+        ``(None, error_dict)``. Jog/goto/frame must refuse without a connection."""
+        dev = backend.device()
+        if dev is None:
+            return None, {"error": "no active device", "connected": False}
+        controller = getattr(dev, "controller", None)
+        if controller is None or not hasattr(controller, "write"):
+            return None, {
+                "error": "active device has no writable controller",
+                "connected": False,
+            }
+        conn = getattr(controller, "connection", None)
+>       if not _connection_state(conn):
+               ^^^^^^^^^^^^^^^^^
+E       NameError: name '_connection_state' is not defined
+
+cli_anything/meerk40t/core/device.py:534: NameError
+__________ TestMotionAckRegression.test_lihuiyu_disconnected_refuses ___________
+
+self = <test_core.TestMotionAckRegression testMethod=test_lihuiyu_disconnected_refuses>
+
+    def test_lihuiyu_disconnected_refuses(self):
+        ch = _MChannel()
+        ctrl = _MController(ch, replies="ok", connected=True)
+        ctrl.connection = type("Conn", (), {"is_connected": lambda self: False})()
+        dev = type("Dev", (), {
+            "safe_label": "FakeLihuiyu",
+            "controller": ctrl,
+            "__str__": lambda self: "LihuiyuDevice",
+        })()
+        backend = type("B", (), {})()
+        backend.device = lambda: dev
+        backend.kernel = type("K", (), {"channel": staticmethod(lambda n: ch)})()
+>       res = device_mod.jog(backend, 1.0, 1.0)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+cli_anything/meerk40t/tests/test_core.py:3935: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+cli_anything/meerk40t/core/device.py:674: in jog
+    controller, err = _require_live_connection(backend)
+                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+backend = <test_core.B object at 0x7f4ba68eab90>
+
+    def _require_live_connection(backend):
+        """Return ``(controller, None)`` when a writable live link exists, else
+        ``(None, error_dict)``. Jog/goto/frame must refuse without a connection."""
+        dev = backend.device()
+        if dev is None:
+            return None, {"error": "no active device", "connected": False}
+        controller = getattr(dev, "controller", None)
+        if controller is None or not hasattr(controller, "write"):
+            return None, {
+                "error": "active device has no writable controller",
+                "connected": False,
+            }
+        conn = getattr(controller, "connection", None)
+>       if not _connection_state(conn):
+               ^^^^^^^^^^^^^^^^^
+E       NameError: name '_connection_state' is not defined
+
+cli_anything/meerk40t/core/device.py:534: NameError
+____ TestMotionAckRegression.test_lihuiyu_lifecycle_connected_acknowledges _____
+
+self = <test_core.TestMotionAckRegression testMethod=test_lihuiyu_lifecycle_connected_acknowledges>
+
+    def test_lihuiyu_lifecycle_connected_acknowledges(self):
+        ch = _MChannel()
+        ctrl = _MController(ch, replies="ok", connected=True)
+        ctrl.connection = type("Conn", (), {"is_connected": lambda self: True})()
+        dev = type("Dev", (), {
+            "safe_label": "FakeLihuiyu",
+            "controller": ctrl,
+            "__str__": lambda self: "LihuiyuDevice",
+        })()
+        backend = type("B", (), {})()
+        backend.device = lambda: dev
+        backend.kernel = type("K", (), {"channel": staticmethod(lambda n: ch)})()
+>       res = device_mod.jog(backend, 1.0, 1.0)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+cli_anything/meerk40t/tests/test_core.py:3914: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+cli_anything/meerk40t/core/device.py:674: in jog
+    controller, err = _require_live_connection(backend)
+                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+backend = <test_core.B object at 0x7f4ba458af90>
+
+    def _require_live_connection(backend):
+        """Return ``(controller, None)`` when a writable live link exists, else
+        ``(None, error_dict)``. Jog/goto/frame must refuse without a connection."""
+        dev = backend.device()
+        if dev is None:
+            return None, {"error": "no active device", "connected": False}
+        controller = getattr(dev, "controller", None)
+        if controller is None or not hasattr(controller, "write"):
+            return None, {
+                "error": "active device has no writable controller",
+                "connected": False,
+            }
+        conn = getattr(controller, "connection", None)
+>       if not _connection_state(conn):
+               ^^^^^^^^^^^^^^^^^
+E       NameError: name '_connection_state' is not defined
+
+cli_anything/meerk40t/core/device.py:534: NameError
+__________ TestMotionAckRegression.test_move_acknowledged_via_spooler __________
+
+self = <test_core.TestMotionAckRegression testMethod=test_move_acknowledged_via_spooler>
+
+    def test_move_acknowledged_via_spooler(self):
+        backend, ctrl = self._spooler_backend(spooler_idle=True)
+>       res = device_mod.move(backend, 1.0, 2.0)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+cli_anything/meerk40t/tests/test_core.py:4037: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+cli_anything/meerk40t/core/device.py:182: in move
+    controller, err = _require_live_connection(backend)
+                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+backend = <test_core.B object at 0x7f4ba453df90>
+
+    def _require_live_connection(backend):
+        """Return ``(controller, None)`` when a writable live link exists, else
+        ``(None, error_dict)``. Jog/goto/frame must refuse without a connection."""
+        dev = backend.device()
+        if dev is None:
+            return None, {"error": "no active device", "connected": False}
+        controller = getattr(dev, "controller", None)
+        if controller is None or not hasattr(controller, "write"):
+            return None, {
+                "error": "active device has no writable controller",
+                "connected": False,
+            }
+        conn = getattr(controller, "connection", None)
+>       if not _connection_state(conn):
+               ^^^^^^^^^^^^^^^^^
+E       NameError: name '_connection_state' is not defined
+
+cli_anything/meerk40t/core/device.py:534: NameError
+______________ TestMotionAckRegression.test_move_relative_command ______________
+
+self = <test_core.TestMotionAckRegression testMethod=test_move_relative_command>
+
+    def test_move_relative_command(self):
+        backend, ctrl = self._spooler_backend(spooler_idle=True)
+>       res = device_mod.move(backend, 10.0, 20.0, absolute=False)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+cli_anything/meerk40t/tests/test_core.py:4008: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+cli_anything/meerk40t/core/device.py:182: in move
+    controller, err = _require_live_connection(backend)
+                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+backend = <test_core.B object at 0x7f4ba4271b50>
+
+    def _require_live_connection(backend):
+        """Return ``(controller, None)`` when a writable live link exists, else
+        ``(None, error_dict)``. Jog/goto/frame must refuse without a connection."""
+        dev = backend.device()
+        if dev is None:
+            return None, {"error": "no active device", "connected": False}
+        controller = getattr(dev, "controller", None)
+        if controller is None or not hasattr(controller, "write"):
+            return None, {
+                "error": "active device has no writable controller",
+                "connected": False,
+            }
+        conn = getattr(controller, "connection", None)
+>       if not _connection_state(conn):
+               ^^^^^^^^^^^^^^^^^
+E       NameError: name '_connection_state' is not defined
+
+cli_anything/meerk40t/core/device.py:534: NameError
+________ TestMotionAckRegression.test_relative_move_keeps_relative_word ________
+
+self = <test_core.TestMotionAckRegression testMethod=test_relative_move_keeps_relative_word>
+
+    def test_relative_move_keeps_relative_word(self):
+        backend, ctrl = self._live_backend(replies="ok")
+>       res = device_mod.jog(backend, 5.0, 5.0, feed=600)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+cli_anything/meerk40t/tests/test_core.py:4003: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+cli_anything/meerk40t/core/device.py:674: in jog
+    controller, err = _require_live_connection(backend)
+                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+backend = <test_core.B object at 0x7f4ba5a1c050>
+
+    def _require_live_connection(backend):
+        """Return ``(controller, None)`` when a writable live link exists, else
+        ``(None, error_dict)``. Jog/goto/frame must refuse without a connection."""
+        dev = backend.device()
+        if dev is None:
+            return None, {"error": "no active device", "connected": False}
+        controller = getattr(dev, "controller", None)
+        if controller is None or not hasattr(controller, "write"):
+            return None, {
+                "error": "active device has no writable controller",
+                "connected": False,
+            }
+        conn = getattr(controller, "connection", None)
+>       if not _connection_state(conn):
+               ^^^^^^^^^^^^^^^^^
+E       NameError: name '_connection_state' is not defined
+
+cli_anything/meerk40t/core/device.py:534: NameError
+_______________ TestMotionAckRegression.test_stale_reply_drained _______________
+
+self = <test_core.TestMotionAckRegression testMethod=test_stale_reply_drained>
+
+    def test_stale_reply_drained(self):
+        backend, ctrl = self._live_backend(replies="error:9", prebuffer=["ok"])
+>       res = device_mod.jog(backend, 1.0, 1.0)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+cli_anything/meerk40t/tests/test_core.py:3941: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+cli_anything/meerk40t/core/device.py:674: in jog
+    controller, err = _require_live_connection(backend)
+                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+backend = <test_core.B object at 0x7f4ba591a1d0>
+
+    def _require_live_connection(backend):
+        """Return ``(controller, None)`` when a writable live link exists, else
+        ``(None, error_dict)``. Jog/goto/frame must refuse without a connection."""
+        dev = backend.device()
+        if dev is None:
+            return None, {"error": "no active device", "connected": False}
+        controller = getattr(dev, "controller", None)
+        if controller is None or not hasattr(controller, "write"):
+            return None, {
+                "error": "active device has no writable controller",
+                "connected": False,
+            }
+        conn = getattr(controller, "connection", None)
+>       if not _connection_state(conn):
+               ^^^^^^^^^^^^^^^^^
+E       NameError: name '_connection_state' is not defined
+
+cli_anything/meerk40t/core/device.py:534: NameError
+_________ TestMotionAckRegression.test_timeout_indeterminate_no_retry __________
+
+self = <test_core.TestMotionAckRegression testMethod=test_timeout_indeterminate_no_retry>
+
+    def test_timeout_indeterminate_no_retry(self):
+        backend, ctrl = self._live_backend(replies=None)
+>       res = device_mod.jog(backend, 1.0, 1.0)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+cli_anything/meerk40t/tests/test_core.py:3976: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+cli_anything/meerk40t/core/device.py:674: in jog
+    controller, err = _require_live_connection(backend)
+                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+backend = <test_core.B object at 0x7f4ba44127d0>
+
+    def _require_live_connection(backend):
+        """Return ``(controller, None)`` when a writable live link exists, else
+        ``(None, error_dict)``. Jog/goto/frame must refuse without a connection."""
+        dev = backend.device()
+        if dev is None:
+            return None, {"error": "no active device", "connected": False}
+        controller = getattr(dev, "controller", None)
+        if controller is None or not hasattr(controller, "write"):
+            return None, {
+                "error": "active device has no writable controller",
+                "connected": False,
+            }
+        conn = getattr(controller, "connection", None)
+>       if not _connection_state(conn):
+               ^^^^^^^^^^^^^^^^^
+E       NameError: name '_connection_state' is not defined
+
+cli_anything/meerk40t/core/device.py:534: NameError
+=========================== short test summary info ============================
+FAILED cli_anything/meerk40t/tests/test_core.py::TestDevice::test_active_info_reads_is_connected_for_lihuiyu - TypeError: '_Dev' object is not subscriptable
+FAILED cli_anything/meerk40t/tests/test_core.py::TestFrameCornerMath::test_frame_traces_five_corners - NameError: name '_connection_state' is not defined
+FAILED cli_anything/meerk40t/tests/test_core.py::TestJogExactStrings::test_frame_emits_absolute_words - NameError: name '_connection_state' is not defined
+FAILED cli_anything/meerk40t/tests/test_core.py::TestJogExactStrings::test_goto_emits_absolute_word - NameError: name '_connection_state' is not defined
+FAILED cli_anything/meerk40t/tests/test_core.py::TestJogExactStrings::test_jog_emits_relative_word - NameError: name '_connection_state' is not defined
+FAILED cli_anything/meerk40t/tests/test_core.py::TestJogExactStrings::test_jog_reports_error_response - NameError: name '_connection_state' is not defined
+FAILED cli_anything/meerk40t/tests/test_core.py::TestJogExactStrings::test_jog_unacknowledged_without_reply - NameError: name '_connection_state' is not defined
+FAILED cli_anything/meerk40t/tests/test_core.py::TestMotionAckRegression::test_alarm_reply_rejected - NameError: name '_connection_state' is not defined
+FAILED cli_anything/meerk40t/tests/test_core.py::TestMotionAckRegression::test_bare_alarm_push_rejected - NameError: name '_connection_state' is not defined
+FAILED cli_anything/meerk40t/tests/test_core.py::TestMotionAckRegression::test_check_state_rejected - NameError: name '_connection_state' is not defined
+FAILED cli_anything/meerk40t/tests/test_core.py::TestMotionAckRegression::test_door_state_rejected - NameError: name '_connection_state' is not defined
+FAILED cli_anything/meerk40t/tests/test_core.py::TestMotionAckRegression::test_error_reply - NameError: name '_connection_state' is not defined
+FAILED cli_anything/meerk40t/tests/test_core.py::TestMotionAckRegression::test_frame_aborts_on_first_failed_corner - NameError: name '_connection_state' is not defined
+FAILED cli_anything/meerk40t/tests/test_core.py::TestMotionAckRegression::test_grbl_lifecycle_connected_acknowledges - NameError: name '_connection_state' is not defined
+FAILED cli_anything/meerk40t/tests/test_core.py::TestMotionAckRegression::test_hold_state_rejected - NameError: name '_connection_state' is not defined
+FAILED cli_anything/meerk40t/tests/test_core.py::TestMotionAckRegression::test_home_acknowledged_via_spooler - NameError: name '_connection_state' is not defined
+FAILED cli_anything/meerk40t/tests/test_core.py::TestMotionAckRegression::test_home_indeterminate_when_spooler_never_idles - NameError: name '_connection_state' is not defined
+FAILED cli_anything/meerk40t/tests/test_core.py::TestMotionAckRegression::test_interleaved_status_indeterminate - NameError: name '_connection_state' is not defined
+FAILED cli_anything/meerk40t/tests/test_core.py::TestMotionAckRegression::test_lihuiyu_disconnected_refuses - NameError: name '_connection_state' is not defined
+FAILED cli_anything/meerk40t/tests/test_core.py::TestMotionAckRegression::test_lihuiyu_lifecycle_connected_acknowledges - NameError: name '_connection_state' is not defined
+FAILED cli_anything/meerk40t/tests/test_core.py::TestMotionAckRegression::test_move_acknowledged_via_spooler - NameError: name '_connection_state' is not defined
+FAILED cli_anything/meerk40t/tests/test_core.py::TestMotionAckRegression::test_move_relative_command - NameError: name '_connection_state' is not defined
+FAILED cli_anything/meerk40t/tests/test_core.py::TestMotionAckRegression::test_relative_move_keeps_relative_word - NameError: name '_connection_state' is not defined
+FAILED cli_anything/meerk40t/tests/test_core.py::TestMotionAckRegression::test_stale_reply_drained - NameError: name '_connection_state' is not defined
+FAILED cli_anything/meerk40t/tests/test_core.py::TestMotionAckRegression::test_timeout_indeterminate_no_retry - NameError: name '_connection_state' is not defined
+25 failed, 394 passed, 6 subtests passed in 65.38s (0:01:05)
