@@ -1,6 +1,6 @@
 # Agent instructions
 
-Read `CONTEXT.md`, `SHARED_CONTEXT.md`, and the relevant records in `docs/decisions/` before changing behavior.
+Read `CONTEXT.md`, `SHARED_CONTEXT.md`, `ROADMAP.md`, and the relevant records in `docs/decisions/` before changing behavior.
 
 ## Agent skills
 
@@ -29,12 +29,14 @@ If the user has already provided a settled issue/spec, enter the workflow at the
 
 ## Roadmap selection
 
+`ROADMAP.md` is the navigation map; GitHub issue bodies are authoritative for status, acceptance criteria, and `Blocked by` relationships.
+
 When the user asks to `/implement` the next ready roadmap item without naming an issue:
 
 1. Inspect open `ready-for-agent` issues and identify active parent specs/roadmaps.
 2. Prefer child tickets of an active spec over the parent spec itself once child tickets exist.
 3. Read every candidate's `Blocked by` section and discard tickets with any open blocker.
-4. Follow the order recorded on the parent spec/roadmap when several tickets are unblocked; otherwise take the oldest unblocked agent-ready ticket.
+4. Follow the order recorded in `ROADMAP.md` when several tickets are unblocked; otherwise take the oldest unblocked agent-ready ticket.
 5. Before starting, check open PRs/branches for work already implementing that ticket and continue it rather than duplicating it.
 6. Close/complete only the ticket actually implemented; parent specs remain open until their roadmap is complete.
 
