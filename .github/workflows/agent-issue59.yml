@@ -1,0 +1,64 @@
+name: Agent issue 59 verification
+
+on:
+  push:
+    branches:
+      - feat/59-shared-status-integration
+
+permissions:
+  contents: write
+
+jobs:
+  implement-and-verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install project and test runner
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e . pytest
+
+      - name: Red — add the seam contract tests and require failure
+        run: |
+          python scripts/agent_issue59.py tests
+          set +e
+          python -m pytest cli_anything/meerk40t/tests/test_integration_status.py -q
+          status=$?
+          set -e
+          if [ "$status" -eq 0 ]; then
+            echo "Expected the issue #59 tests to fail before implementation."
+            exit 1
+          fi
+
+      - name: Green — implement the shared status seam
+        run: python scripts/agent_issue59.py implementation
+
+      - name: Verify focused status tracer
+        run: python -m pytest cli_anything/meerk40t/tests/test_integration_status.py -q
+
+      - name: Verify full project suite
+        run: python -m pytest cli_anything/meerk40t/tests/ -q
+
+      - name: Compile Python sources
+        run: python -m compileall -q cli_anything/meerk40t
+
+      - name: Commit verified implementation
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add \
+            cli_anything/meerk40t/utils/meerk40t_integration.py \
+            cli_anything/meerk40t/core/device.py \
+            cli_anything/meerk40t/mk_control.py \
+            cli_anything/meerk40t/tests/test_integration_status.py
+          git diff --cached --check
+          git commit -m "Implement shared MeerK40t status seam (#59)"
+          git push
