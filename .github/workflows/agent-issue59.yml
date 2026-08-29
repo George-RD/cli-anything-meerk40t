@@ -51,6 +51,89 @@ jobs:
       - name: Green — implement the shared status seam
         run: python scripts/agent_issue59.py implementation
 
+      - name: Preserve existing helper contracts through the seam
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          seam_path = Path("cli_anything/meerk40t/utils/meerk40t_integration.py")
+          seam = seam_path.read_text()
+          marker = '''    @classmethod
+              def from_kernel(cls, kernel: Any) -> "MeerK40tIntegration":'''
+          insertion = '''    @classmethod
+              def from_device(cls, device: Any) -> "MeerK40tIntegration":
+                  """Build the seam from an already-resolved device service."""
+                  return cls(device)
+          
+              @classmethod
+              def from_kernel(cls, kernel: Any) -> "MeerK40tIntegration":'''
+          if marker not in seam:
+              raise SystemExit("from_kernel marker not found")
+          seam = seam.replace(marker, insertion, 1)
+
+          start_marker = "    @staticmethod\n    def _connection_state(device: Any) -> bool:\n"
+          end_marker = "\n    @staticmethod\n    def _grbl_state"
+          start = seam.index(start_marker)
+          end = seam.index(end_marker, start)
+          connection_helpers = '''    @staticmethod
+              def connection_state(connection: Any) -> bool:
+                  """Resolve a MeerK40t driver's live connection state."""
+                  if connection is None:
+                      return False
+                  connected = getattr(connection, "connected", None)
+                  if isinstance(connected, bool):
+                      return connected
+                  is_connected = getattr(connection, "is_connected", None)
+                  if callable(is_connected):
+                      return bool(is_connected())
+                  if isinstance(connected, int):
+                      return bool(connected)
+                  return bool(connected)
+          
+              @classmethod
+              def _device_connection_state(cls, device: Any) -> bool:
+                  controller = getattr(device, "controller", None)
+                  connection = (
+                      getattr(controller, "connection", None)
+                      if controller is not None
+                      else None
+                  )
+                  return cls.connection_state(connection)
+          '''
+          seam = seam[:start] + connection_helpers + seam[end:]
+          seam = seam.replace(
+              '"connected": self._connection_state(device),',
+              '"connected": self._device_connection_state(device),',
+              1,
+          )
+          seam_path.write_text(seam)
+
+          device_path = Path("cli_anything/meerk40t/core/device.py")
+          device = device_path.read_text()
+          old = '''def _active_info(snapshot):
+              """Map canonical integration facts into the existing CLI status shape."""
+              if snapshot["device"] is None:'''
+          new = '''def _active_info(snapshot):
+              """Map canonical integration facts into the existing CLI status shape."""
+              if not isinstance(snapshot, dict):
+                  snapshot = MeerK40tIntegration.from_device(snapshot).status_snapshot()
+              if snapshot["device"] is None:'''
+          if old not in device:
+              raise SystemExit("active-info marker not found")
+          device = device.replace(old, new, 1)
+          marker = "def _parse_position(lines):"
+          adapter = '''def _connection_state(conn):
+              """Keep legacy motion callers on the seam until their roadmap slice."""
+              return MeerK40tIntegration.connection_state(conn)
+          
+          
+          def _parse_position(lines):'''
+          if marker not in device:
+              raise SystemExit("position marker not found")
+          device = device.replace(marker, adapter, 1)
+          device_path.write_text(device)
+          PY
+
       - name: Verify focused status tracer
         run: |
           set -o pipefail
