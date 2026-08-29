@@ -1,6 +1,6 @@
 # Agent instructions
 
-Read `CONTEXT.md`, `SHARED_CONTEXT.md`, and the relevant records in `docs/decisions/` before changing behavior.
+Read `CONTEXT.md`, `SHARED_CONTEXT.md`, `ROADMAP.md`, and the relevant records in `docs/decisions/` before changing behavior.
 
 ## Agent skills
 
@@ -27,9 +27,25 @@ Use the vendored Matt Pocock engineering workflow under `.agents/skills/`:
 
 If the user has already provided a settled issue/spec, enter the workflow at the closest applicable step rather than repeating earlier phases.
 
+## Roadmap selection
+
+`ROADMAP.md` is the navigation map; GitHub issue bodies are authoritative for status, acceptance criteria, and `Blocked by` relationships.
+
+When the user asks to `/implement` the next ready roadmap item without naming an issue:
+
+1. Inspect open `ready-for-agent` issues and identify active parent specs/roadmaps.
+2. Prefer child tickets of an active spec over the parent spec itself once child tickets exist.
+3. Read every candidate's `Blocked by` section and discard tickets with any open blocker.
+4. Follow the order recorded in `ROADMAP.md` when several tickets are unblocked; otherwise take the oldest unblocked agent-ready ticket.
+5. Before starting, check open PRs/branches for work already implementing that ticket and continue it rather than duplicating it.
+6. Close/complete only the ticket actually implemented; parent specs remain open until their roadmap is complete.
+
+Textual `Blocked by: #...` relationships are authoritative when native GitHub issue dependencies are unavailable through the current tooling.
+
 ## Repository invariants
 
 - The real MeerK40t kernel remains the backend; do not replace it with a parallel implementation.
 - Offline preparation and verification stay separate from operator-controlled hardware action.
 - Preserve accepted ADR guarantees unless the task explicitly reopens the decision.
 - In particular, keep exactly-once command outcome/persistence semantics, receiver-side verification of staged artifacts, acknowledged motion, and build-once publishing.
+- Follow ADR-0006: direct knowledge of MeerK40t internals and version differences belongs behind the canonical harness integration seam; prefer native MeerK40t services/objects over duplicated runtime logic.
