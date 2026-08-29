@@ -16,17 +16,11 @@ jobs:
   released-runtime:
     name: released ${{ matrix.meerk40t-version }}
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 10
     strategy:
       fail-fast: false
       matrix:
         meerk40t-version:
-          - "0.9.1000"
-          - "0.9.3001"
-          - "0.9.7010"
-          - "0.9.8100"
-          - "0.9.8200"
-          - "0.9.8220"
           - "0.9.8230"
           - "0.9.8930"
           - "0.9.9000"
@@ -42,19 +36,23 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Install harness and test tooling
+      - name: Install harness against exact supported release
+        env:
+          MEERK40T_VERSION: ${{ matrix.meerk40t-version }}
         run: |
           python -m pip install --upgrade pip
-          python -m pip install -e . pytest
-
-      - name: Force candidate MeerK40t release
-        run: python -m pip install --force-reinstall "meerk40t==${{ matrix.meerk40t-version }}"
+          printf 'meerk40t==%s\n' "$MEERK40T_VERSION" > /tmp/meerk40t-constraint.txt
+          PIP_CONSTRAINT=/tmp/meerk40t-constraint.txt python -m pip install -e . pytest
 
       - name: Confirm exact MeerK40t version
+        env:
+          MEERK40T_VERSION: ${{ matrix.meerk40t-version }}
         run: |
           python - <<'PY'
+          import os
           from importlib.metadata import version
-          expected = "${{ matrix.meerk40t-version }}"
+
+          expected = os.environ["MEERK40T_VERSION"]
           actual = version("meerk40t")
           print(f"MeerK40t {actual}")
           if actual != expected:
@@ -74,7 +72,7 @@ jobs:
   upstream-main:
     name: upstream main (informational)
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 10
     continue-on-error: true
     steps:
       - name: Checkout

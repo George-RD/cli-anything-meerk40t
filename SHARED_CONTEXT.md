@@ -13,6 +13,7 @@ backend for headless, agent-driven laser job preparation. The package lives in
 2. [`MEERK40T.md`](MEERK40T.md) — the operator SOP for driving a real laser.
 3. [`DESIGN.md`](DESIGN.md) — architecture, state model, and the 11 command groups.
 4. [`BACKEND_CONTRACT.md`](BACKEND_CONTRACT.md) — the verified `Meerk40tBackend` interface.
+5. [`docs/compatibility.md`](docs/compatibility.md) — the exact released MeerK40t runtimes CI must preserve and the upstream-main early-warning policy.
 
 ## Decisions (why the code is shaped this way)
 The `docs/decisions/` directory holds accepted decision records (ADRs). Each
@@ -23,14 +24,19 @@ maps a behavioural guarantee to the code that enforces it:
 - [ADR-0003](docs/decisions/ADR-0003-receiver-verified-artifacts.md) — receiver-verified job artifacts (issue #28)
 - [ADR-0004](docs/decisions/ADR-0004-acknowledged-motion.md) — acknowledged GRBL motion (issue #29)
 - [ADR-0005](docs/decisions/ADR-0005-build-once-publish.md) — build-once publish (issue #30)
+- [ADR-0006](docs/decisions/ADR-0006-native-meerk40t-integration-seam.md) — canonical native MeerK40t integration seam (issue #59)
+- [ADR-0007](docs/decisions/ADR-0007-meerk40t-compatibility-ci-policy.md) — released compatibility matrix and informational upstream-main lane (issue #60)
 
 ## Plan of record
 [`docs/plans/foundational-remediation.md`](docs/plans/foundational-remediation.md)
-is the atomic-issue backlog that sequences this work.
+is the atomic-issue backlog that sequences this work. `ROADMAP.md` is the
+ready-order/dependency view used to select the next implementation item.
 
 ## Testing
 [`cli_anything/meerk40t/tests/TEST.md`](cli_anything/meerk40t/tests/TEST.md) —
-durable test strategy and the load-bearing invariant suites. Run the suite with:
+durable test strategy and the load-bearing invariant suites. Released-runtime
+compatibility is additionally enforced by `.github/workflows/compatibility.yml`.
+Run the suite with:
 
 ```bash
 .venv/bin/python -m unittest cli_anything.meerk40t.tests.test_core -v
@@ -48,6 +54,7 @@ cli_anything/meerk40t/
 ├── tests/               # TEST.md, test_core.py, test_mk_plugin.py, test_full_e2e.py
 └── mk_control.py        # consoleserver control channel (receiver staging)
 docs/
+├── compatibility.md     # released-runtime support contract
 ├── plans/               # foundational-remediation.md (issue backlog)
 └── decisions/           # ADR-*.md (this repo's design canon)
 ```
