@@ -42,7 +42,18 @@ jobs:
         run: python scripts/agent_issue59.py implementation
 
       - name: Verify focused status tracer
-        run: python -m pytest cli_anything/meerk40t/tests/test_integration_status.py -q
+        run: |
+          set -o pipefail
+          python -m pytest cli_anything/meerk40t/tests/test_integration_status.py -q 2>&1 | tee issue59-focused.log
+
+      - name: Persist focused failure evidence
+        if: failure()
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add issue59-focused.log
+          git commit -m "chore: capture issue 59 focused failure"
+          git push
 
       - name: Verify full project suite
         run: python -m pytest cli_anything/meerk40t/tests/ -q
