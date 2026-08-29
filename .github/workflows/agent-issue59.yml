@@ -29,6 +29,25 @@ jobs:
       - name: Red — add the seam contract tests and require failure
         run: |
           python scripts/agent_issue59.py tests
+          python - <<'PY'
+          from pathlib import Path
+          path = Path("cli_anything/meerk40t/tests/test_integration_status.py")
+          text = path.read_text()
+          old = '''    frames = [
+              json.loads(line[len(FRAME_PREFIX):])
+              for line in lines
+              if line.startswith(FRAME_PREFIX)
+          ]'''
+          new = '''    normalized = [line.lstrip() for line in lines]
+          frames = [
+              json.loads(line[len(FRAME_PREFIX):])
+              for line in normalized
+              if line.startswith(FRAME_PREFIX)
+          ]'''
+          if old not in text:
+              raise SystemExit("attach frame parser marker not found")
+          path.write_text(text.replace(old, new, 1))
+          PY
           set +e
           python -m pytest cli_anything/meerk40t/tests/test_integration_status.py -q
           status=$?
