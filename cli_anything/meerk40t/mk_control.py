@@ -29,7 +29,7 @@ import os
 import hashlib
 import tempfile
 import threading
-from cli_anything.meerk40t.utils import serial_probe
+from cli_anything.meerk40t.utils.meerk40t_integration import MeerK40tIntegration
 from cli_anything.meerk40t.utils.attach_envelope import (
     PROTOCOL_VERSION,
     decode_request,
@@ -132,74 +132,27 @@ def _register_agent_command(kernel):
 
 
 def _build_status(kernel):
-    device = getattr(kernel, "device", None)
-    elements = getattr(kernel, "elements", None)
+    snapshot = MeerK40tIntegration.from_kernel(kernel).status_snapshot()
 
-    elem_count = 0
-    op_count = 0
-    if elements is not None:
-        try:
-            elem_count = len(list(elements.elems()))
-        except Exception:
-            pass
-        try:
-            op_count = len(list(elements.ops()))
-        except Exception:
-            pass
-
-    device_label = None
-    devices = []
+    device_label = snapshot["label"] or snapshot["type"]
+    raw_port = snapshot["serial_port"]
     serial_port = None
-    grbl_state = "unknown"
-    bed = {"width": None, "height": None}
-    spooler_queue = 0
-
-    if device is not None:
-        device_label = getattr(device, "label", None) or getattr(device, "name", None)
-        if device_label:
-            devices = [device_label]
-
-        if hasattr(device, "bedwidth"):
-            bed["width"] = str(device.bedwidth)
-        if hasattr(device, "bedheight"):
-            bed["height"] = str(device.bedheight)
-
-        spooler = getattr(device, "spooler", None)
-        if spooler is not None:
-            try:
-                spooler_queue = len(spooler)
-            except Exception:
-                pass
-
-        raw_port = getattr(device, "serial_port", None) or getattr(device, "port", None)
-        if raw_port is not None and str(raw_port).lower() != "unconfigured":
-            serial_port = str(raw_port)
-        # Preserve the full GRBL state vocabulary (incl. Hold/Door/Check/Home)
-        # instead of collapsing unknown states to "unknown".
-        state = getattr(device, "_state", None)
-        parsed_base, parsed_sub = serial_probe.parse_grbl_state(state or "")
-        if parsed_base is not None:
-            grbl_state = parsed_base if parsed_sub is None else f"{parsed_base}:{parsed_sub}"
-        else:
-            driver = getattr(device, "driver", None)
-            if driver is not None:
-                drv_state = getattr(driver, "grbl_state", None) or getattr(
-                    driver, "_state", None
-                )
-                parsed_base, parsed_sub = serial_probe.parse_grbl_state(drv_state or "")
-                if parsed_base is not None:
-                    grbl_state = parsed_base if parsed_sub is None else f"{parsed_base}:{parsed_sub}"
+    if raw_port is not None and str(raw_port).lower() != "unconfigured":
+        serial_port = str(raw_port)
 
     return {
         "protocol": PROTOCOL_VERSION,
-        "devices": devices,
+        "devices": [device_label] if device_label else [],
         "active_device": device_label,
         "serial_port": serial_port,
-        "grbl_state": grbl_state,
-        "bed": bed,
-        "elements": elem_count,
-        "operations": op_count,
-        "spooler_queue": spooler_queue,
+        "grbl_state": snapshot["grbl_state"] or "unknown",
+        "bed": {
+            "width": None if snapshot["bed_width"] is None else str(snapshot["bed_width"]),
+            "height": None if snapshot["bed_height"] is None else str(snapshot["bed_height"]),
+        },
+        "elements": snapshot["element_count"],
+        "operations": snapshot["operation_count"],
+        "spooler_queue": snapshot["spooler_queue"],
     }
 
 
