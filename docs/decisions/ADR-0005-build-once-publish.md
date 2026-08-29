@@ -15,10 +15,15 @@ canonical skills source tree).
   runtime `package_data`: `skills/*.md`, `skills/references/*.md`, `README.md`,
   `profiles/*.json`, `materials/*.json`. It intentionally does **not** package
   the top-level `skills/` canonical tree, `evals/`, or docs.
-- `.github/workflows/publish.yml` triggers only on `v*` tags, builds sdist +
-  trusted publishing (no API token). There is deliberately **no test job in CI**:
-  the test suite is run locally before a `v*` tag is cut; the publish workflow
-  only builds and verifies the artifact.
+- `.github/workflows/publish.yml` triggers only on `v*` tags and uses three
+  gated jobs: `test-build` -> `clean-wheel` -> `publish`. `test-build` runs the
+  source behavioral suite before building, builds the sdist and wheel exactly
+  once, generates an exact checksum allowlist, and validates the built wheel in
+  a clean venv. `clean-wheel` downloads and smoke-tests that same artifact.
+  `publish` re-verifies the same artifact and is the only job granted OIDC
+  `id-token: write` for trusted publishing.
+- A source-test, artifact-integrity, installed-wheel, or clean-wheel failure
+  blocks publication. Later jobs never rebuild the distribution they receive.
 - `TestSkillPackaging` (`test_core.py:1434`) asserts the packaged `skills/SKILL.md`
   and every linked `references/*.md` are byte-identical to the canonical
   `skills/cli-anything-meerk40t/` tree, and self-skips when that canonical tree
@@ -27,5 +32,7 @@ canonical skills source tree).
 ## Consequences
 - The published wheel is deterministic and minimal.
 - Shipped skill docs are verified identical to source before publish.
-- CI never silently publishes an untested artifact; the `v*` tag is only cut
-  after the suite is green.
+- CI cannot publish when the source suite or the exact built artifact fails its
+  verification gates.
+- The compatibility workflow introduced by #60 is a separate pre-merge/runtime
+  contract and does not change this build-once artifact handoff.

@@ -27,12 +27,27 @@ CLI_ANYTHING_FORCE_INSTALLED=1 .venv/bin/python -m unittest \
 # Full sweep:
 .venv/bin/python -m pytest cli_anything/meerk40t/tests/ -q
 ```
-Both test modules create a fresh backend in `setUp` and tear it down in
-`tearDown`. E2E tests that exercise the installed CLI fall back to
+The suites create fresh real-kernel state and tear it down after each case. E2E
+tests that exercise the installed CLI fall back to
 `python -m cli_anything.meerk40t.meerk40t_cli` when the console script is
 absent.
 
-## Clean-install invariant (regression guard for #51)
+## MeerK40t compatibility contract (#60)
+Released compatibility is not inferred from the dependency resolver. Required
+CI exact-pins every release in the supported window:
+
+```text
+meerk40t>=0.9.8220,<=0.9.9100
+```
+
+The required matrix is `0.9.8220`, `0.9.8230`, `0.9.8930`, `0.9.9000`, and
+`0.9.9100`. For each release, `.github/workflows/compatibility.yml` runs the
+canonical integration-seam tests and the behavioral gate above. Current
+upstream `main` runs the same checks in a non-blocking informational lane. The
+rationale, probe evidence, and process for changing the window are in
+[`docs/compatibility.md`](../../../docs/compatibility.md).
+
+## Current-release clean-install invariant (regression guard for #51)
 The suite MUST pass on a **pristine** `meerk40t==0.9.9100` install as well as on
 the editable dev install. Run it from a neutral cwd with `PYTHONPATH` unset so a
 stray dev build cannot shadow the clean package:
@@ -45,32 +60,33 @@ CLI_ANYTHING_FORCE_INSTALLED=1 /tmp/ca_clean/venv/bin/python -m unittest \
 ```
 **Why both installs matter.** Each test boots a fresh kernel, so patch/loader
 state is process-local and does **not** leak across runs. The real divergence is
-the **install/code version**: the dev (editable) build and the clean
-`meerk40t==0.9.9100` package differ in two ways that alone can mask or break the
-back-fill and staging logic — (1) both installs run `apply_backfill_patches` at
-plugin boot, but dev's upstream `set` command already starts fixed (so the
-back-fill no-ops) whereas clean 0.9.9100 ships a broken `set` (so the back-fill
-(2) the clean package's `elements.load` is additive for user elements but **removes the
- boot-default ops** during load (the staged elements are appended); the net replace of
- the prior scene is performed by `_commit_replacement` detaching pre-existing roots on
- commit. The dev build is fully additive. Tests MUST be hermetic and never
-assert against an install-specific starting state. The `mk_plugin` tests force the
-code path under test directly (`UPSTREAM_FIXED_VERSION` for the version
-short-circuit; a `_get_registered_set` lookup patch to a marker-verified fixed
-command for the behavioural detectors) so they are green on both installs. The
-The `mk_control` staging tests seed deterministic pre-existing roots via the
-project's `operations.add_operation` API and snapshot/restore scene roots
-explicitly (`_snapshot`) rather than relying on a freshly-empty scene or
-backend boot defaults.
+the **install/code version**: the dev (editable) build and clean
+`meerk40t==0.9.9100` differ in two ways that can mask or break the back-fill and
+staging logic: (1) both installs run `apply_backfill_patches` at plugin boot,
+but the dev upstream `set` command already starts fixed so the back-fill no-ops,
+whereas clean 0.9.9100 ships the broken command and activates the back-fill;
+(2) the clean package's `elements.load` is additive for user elements but
+**removes the boot-default ops** during load, while the dev build is fully
+additive. The net replacement of the prior scene is performed by
+`_commit_replacement`, which detaches pre-existing roots on commit. Tests MUST
+be hermetic and never assert against an install-specific starting state. The
+`mk_plugin` tests force the code path under test directly
+(`UPSTREAM_FIXED_VERSION` for the version short-circuit; a `_get_registered_set`
+lookup patch to a marker-verified fixed command for the behavioural detectors)
+so they are green on both installs. The `mk_control` staging tests seed
+deterministic pre-existing roots via the project's `operations.add_operation`
+API and snapshot/restore scene roots explicitly (`_snapshot`) rather than
+relying on a freshly-empty scene or backend boot defaults.
 
-**Loader invariant.** On the clean `0.9.9100` package, `elements.load` is additive for
- elements but **removes the boot-default ops** during load (staged elements are appended);
- on the dev build it is fully additive. The net "replace" of the prior scene is driven by
- `_commit_replacement` detaching pre-existing roots on a successful commit. Production
- rollback (`mk_control._restore_pre`) restores the boot-default ops the loader displaced,
- re-attaching only roots that are no longer live, on every refusal / commit-failure path.
- A green result on the clean install is the proof that the displaced boot-default ops are
- restored rather than silently dropped.
+**Loader invariant.** On the clean `0.9.9100` package, `elements.load` is
+additive for elements but **removes the boot-default ops** during load (staged
+elements are appended); on the dev build it is fully additive. The net
+"replace" of the prior scene is driven by `_commit_replacement` detaching
+pre-existing roots on a successful commit. Production rollback
+(`mk_control._restore_pre`) restores the boot-default ops the loader displaced,
+re-attaching only roots that are no longer live, on every refusal /
+commit-failure path. A green result on the clean install proves that the
+displaced boot-default ops are restored rather than silently dropped.
 
 ## Load-bearing invariant suites
 - **`TestJogRefusalWithoutConnection`** (`test_core.py:792`) — `jog`/`goto`/`frame`
@@ -97,9 +113,15 @@ backend boot defaults.
   at default power (1000) unless `allow_full_power` is set.
 - **`TestSessionPersistence`** (`test_core.py`) — session JSON saves/loads and
   undo/redo move commands through the history stacks.
-## Coverage snapshot
 
-The full suite passes on a **clean** `meerk40t==0.9.9100` install (`CLI_ANYTHING_FORCE_INSTALLED=1`, run from a neutral cwd with `PYTHONPATH` unset — see the Clean-install invariant above). The dev (editable) install passes the same gate; one test, `TestIssue31Phase1.test_concurrent_stage_clients_correlated`, is concurrency/network-sensitive and may intermittently fail on the dev install only — it is unrelated to #51 and green on the clean install:
+## Coverage snapshot
+The full suite passes on a **clean** `meerk40t==0.9.9100` install
+(`CLI_ANYTHING_FORCE_INSTALLED=1`, run from a neutral cwd with `PYTHONPATH`
+unset — see the current-release clean-install invariant above). The dev
+(editable) install passes the same gate; one test,
+`TestIssue31Phase1.test_concurrent_stage_clients_correlated`, is
+concurrency/network-sensitive and may intermittently fail on the dev install
+only — it is unrelated to #51 and green on the clean install:
 ```bash
 CLI_ANYTHING_FORCE_INSTALLED=1 \
   .venv/bin/python -m unittest \
