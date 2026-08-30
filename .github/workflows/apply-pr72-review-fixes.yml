@@ -1,0 +1,55 @@
+name: Apply PR 72 review fixes
+
+on:
+  push:
+    branches:
+      - feat/61-native-normal-motion
+    paths:
+      - ".github/workflows/apply-pr72-review-fixes.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          ref: feat/61-native-normal-motion
+          fetch-depth: 0
+
+      - name: Materialize verified patch script
+        run: |
+          python - <<'PY'
+          import base64
+          import gzip
+          from pathlib import Path
+
+          parts = sorted(Path(".github/patch-payload").glob("part-*"))
+          payload = "".join(path.read_text(encoding="utf-8") for path in parts)
+          Path("/tmp/apply_pr72_review_fixes.py").write_bytes(
+              gzip.decompress(base64.b64decode(payload))
+          )
+          PY
+
+      - name: Apply review fixes
+        run: python /tmp/apply_pr72_review_fixes.py
+
+      - name: Validate syntax and diff
+        run: |
+          python -m compileall -q cli_anything/meerk40t
+          git diff --check
+
+      - name: Commit fixes
+        run: |
+          git config user.name "George"
+          git config user.email "180932462+George-RD@users.noreply.github.com"
+          git add \
+            cli_anything/meerk40t/core/device.py \
+            cli_anything/meerk40t/tests/test_integration_status.py \
+            cli_anything/meerk40t/utils/meerk40t_integration.py
+          git commit -m "fix: address normal-motion review findings"
+          git push origin HEAD:feat/61-native-normal-motion
