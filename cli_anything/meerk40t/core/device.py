@@ -1,7 +1,10 @@
 """Device control: listing, status, connect and disconnect.
 
-All functions take a ``Meerk40tBackend`` and talk to the live MeerK40t
-kernel. Connect/disconnect are grounded in the real MeerK40t source:
+All functions talk to the live MeerK40t kernel. Shared status facts, connection
+readiness, and normal-motion completion are owned by ``MeerK40tIntegration``;
+GRBL-specific jog/goto/frame transport remains here until roadmap issue #62.
+
+Connect/disconnect are grounded in the real MeerK40t source:
 
 * A GRBL (and other serial) device exposes a ``controller`` service delegate.
 * ``controller.open()`` calls ``connection.connect()``
@@ -20,7 +23,6 @@ import re
 import time
 import threading
 
-from cli_anything.meerk40t.utils.meerk40t_backend import Meerk40tBackend
 from cli_anything.meerk40t.utils.meerk40t_integration import MeerK40tIntegration
 from cli_anything.meerk40t.utils import serial_probe
 
@@ -46,11 +48,6 @@ def _active_info(snapshot):
     return info
 
 
-def _connection_state(conn):
-    """Keep legacy motion callers on the seam until their roadmap slice."""
-    return MeerK40tIntegration.connection_state(conn)
-
-
 def _parse_position(lines):
     pos = None
     for line in lines:
@@ -62,14 +59,22 @@ def _parse_position(lines):
             except ValueError:
                 pos = {"x": m.group(1), "y": m.group(2)}
             break
-        m = re.search(r"x=\s*([\d.\-+]+)\s*,?\s*y=\s*([\d.\-+]+)", line, re.IGNORECASE)
+        m = re.search(
+            r"x=\s*([\d.\-+]+)\s*,?\s*y=\s*([\d.\-+]+)",
+            line,
+            re.IGNORECASE,
+        )
         if m:
             try:
                 pos = {"x": float(m.group(1)), "y": float(m.group(2))}
             except ValueError:
                 pos = {"x": m.group(1), "y": m.group(2)}
             break
-        m = re.search(r"position[:\s]+([\d.\-+]+)\s*,\s*([\d.\-+]+)", line, re.IGNORECASE)
+        m = re.search(
+            r"position[:\s]+([\d.\-+]+)\s*,\s*([\d.\-+]+)",
+            line,
+            re.IGNORECASE,
+        )
         if m:
             try:
                 pos = {"x": float(m.group(1)), "y": float(m.group(2))}
@@ -129,80 +134,43 @@ def device_info(backend):
     return result
 
 
-def _confirm_spooler_idle(backend, timeout=2.0):
-    """Confirm a submitted command reached the spooler idle state.
-
-    Used by home/move as the acknowledgement signal: after enqueuing the
-    command we wait (bounded) for the spooler to drain. Returns True only if
-    the spooler reports idle within ``timeout``; otherwise False (indeterminate,
-    no auto-retry). Falls back to the device's spooler when the backend has none.
-    """
-    spooler = getattr(backend, "spooler", None)
-    if spooler is None:
-        dev = backend.device()
-        if dev is not None:
-            spooler = getattr(dev, "spooler", None)
-    if spooler is None or not hasattr(spooler, "is_idle"):
-        return False
-    deadline = time.time() + timeout
-    while time.time() < deadline:
-        try:
-            if spooler.is_idle():
-                return True
-        except Exception:
-            return False
-        time.sleep(0.05)
-    return False
+def _normal_motion_result(backend, command, success_key, **fields):
+    """Map the native integration outcome into the stable public result shape."""
+    outcome = MeerK40tIntegration.from_backend(backend).run_normal_motion(command)
+    acknowledged = bool(outcome.get("acknowledged"))
+    result = {
+        success_key: acknowledged,
+        **fields,
+        "command": command,
+        "acknowledged": acknowledged,
+        "error": outcome.get("error"),
+    }
+    if "connected" in outcome:
+        result["connected"] = outcome["connected"]
+    return result
 
 
 def home(backend):
-    controller, err = _require_live_connection(backend)
-    if err:
-        err["command"] = "home"
-        return err
-    backend.run("home")
-    acknowledged = _confirm_spooler_idle(backend)
-    return {
-        "homed": acknowledged,
-        "acknowledged": acknowledged,
-        "command": "home",
-        "error": None if acknowledged else "spooler did not reach idle within timeout",
-    }
+    """Home through MeerK40t's native spooler/driver completion path."""
+    return _normal_motion_result(backend, "home", "homed")
 
 
 def physical_home(backend):
-    controller, err = _require_live_connection(backend)
-    if err:
-        err["command"] = "physical_home"
-        return err
-    backend.run("physical_home")
-    acknowledged = _confirm_spooler_idle(backend)
-    return {
-        "physical_homed": acknowledged,
-        "acknowledged": acknowledged,
-        "command": "physical_home",
-        "error": None if acknowledged else "spooler did not reach idle within timeout",
-    }
+    """Physical-home through MeerK40t's native spooler/driver completion path."""
+    return _normal_motion_result(backend, "physical_home", "physical_homed")
 
 
 def move(backend, x, y, absolute=True):
-    controller, err = _require_live_connection(backend)
-    if err:
-        err["command"] = "move"
-        err["absolute"] = absolute
-        return err
+    """Move through MeerK40t so native unit/view/coordinate semantics apply."""
     cmd = f"move_absolute {x} {y}" if absolute else f"move {x} {y}"
-    backend.run(cmd)
-    acknowledged = _confirm_spooler_idle(backend)
-    return {
-        "moved": acknowledged,
-        "x": x,
-        "y": y,
-        "absolute": absolute,
-        "command": cmd,
-        "acknowledged": acknowledged,
-        "error": None if acknowledged else "spooler did not reach idle within timeout",
-    }
+    return _normal_motion_result(
+        backend,
+        cmd,
+        "moved",
+        x=x,
+        y=y,
+        absolute=absolute,
+    )
 
 
 def _connect_result(backend):
@@ -307,6 +275,7 @@ def detect(probe: bool = False, probe_port_fn=None) -> dict:
         ports.append(entry)
     return {"ports": ports}
 
+
 def parse_settings(text: str) -> dict:
     """Parse a ``$$`` settings dump into ``{code: value}`` (code as int)."""
     settings: dict = {}
@@ -333,7 +302,9 @@ def parse_startup_blocks(text: str) -> dict:
     return {"startup_blocks": blocks}
 
 
-def _query_controller_response(backend, controller, command: str, timeout: float = 1.0) -> str:
+def _query_controller_response(
+    backend, controller, command: str, timeout: float = 1.0
+) -> str:
     """Best-effort capture of a controller's raw reply to ``command``.
 
     The GRBL controller logs every received line to a ``recv-<label>`` channel,
@@ -489,7 +460,6 @@ def setup_profile(
     # `get` method, so read the attribute directly (never a dead backend.get()).
     baud = getattr(dev, "baud_rate", None)
 
-
     bedwidth_mm = settings.get(130)
     bedheight_mm = settings.get(131)
     # provenance is only "verified" when the live readback actually yielded
@@ -499,7 +469,8 @@ def setup_profile(
     verified = read_settings or read_ident
     if read_ident:
         firmware = " ".join(
-            p for p in (ident.get("firmware") or "Grbl", ident.get("version"))
+            p
+            for p in (ident.get("firmware") or "Grbl", ident.get("version"))
             if p
         ).strip() or "Grbl"
     else:
@@ -526,24 +497,8 @@ def setup_profile(
 
 
 def _require_live_connection(backend):
-    """Return ``(controller, None)`` when a writable live link exists, else
-    ``(None, error_dict)``. Jog/goto/frame must refuse without a connection."""
-    dev = backend.device()
-    if dev is None:
-        return None, {"error": "no active device", "connected": False}
-    controller = getattr(dev, "controller", None)
-    if controller is None or not hasattr(controller, "write"):
-        return None, {
-            "error": "active device has no writable controller",
-            "connected": False,
-        }
-    conn = getattr(controller, "connection", None)
-    if not _connection_state(conn):
-        return None, {
-            "error": "no live connection; run device connect first",
-            "connected": False,
-        }
-    return controller, None
+    """Use the canonical seam for the existing jog/goto/frame connection gate."""
+    return MeerK40tIntegration.from_backend(backend).live_controller()
 
 
 _ACK_LOCKS: dict = {}
@@ -658,7 +613,10 @@ def _parse_ack(reply):
     status, message = _classify_ack(reply)
     return status == "ok", message
 
-def _format_jog(mode: str, x: float, y: float, feed: int, machine_coords: bool = False) -> str:
+
+def _format_jog(
+    mode: str, x: float, y: float, feed: int, machine_coords: bool = False
+) -> str:
     """Format a GRBL jog command per the GRBL 1.1 jogging spec.
 
     ``mode`` is ``G91`` (relative) or ``G90`` (absolute). Coordinates are
@@ -672,7 +630,6 @@ def _format_jog(mode: str, x: float, y: float, feed: int, machine_coords: bool =
     """
     prefix = "G53G21" if machine_coords else "G21"
     return f"$J={prefix}{mode} X{x} Y{y} F{feed}"
-
 
 
 def jog(backend, dx: float, dy: float, feed: int = 600) -> dict:
@@ -698,7 +655,6 @@ def jog(backend, dx: float, dy: float, feed: int = 600) -> dict:
     }
 
 
-
 def goto(backend, x: float, y: float, feed: int = 3000) -> dict:
     """Absolute jog in machine mm (origin front-left, +Y away). Refuses when
     no live connection exists. Reports GRBL acknowledgement (ok/error)."""
@@ -720,7 +676,6 @@ def goto(backend, x: float, y: float, feed: int = 3000) -> dict:
         "response": reply.strip() or None,
         "error": error_text,
     }
-
 
 
 def frame(backend, x, y, w, h, feed=1500):
