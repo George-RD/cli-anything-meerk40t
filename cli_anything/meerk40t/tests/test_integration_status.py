@@ -212,6 +212,17 @@ def test_native_motion_success_requires_motion_and_wait_finish_barrier():
     assert backend.spooler.commands == [("wait_finish",)]
 
 
+def test_native_physical_home_uses_same_completion_contract():
+    backend = _NativeMotionBackend()
+    result = device_core.physical_home(backend)
+
+    assert result["physical_homed"] is True
+    assert result["acknowledged"] is True
+    assert result["command"] == "physical_home"
+    assert backend.commands == ["physical_home"]
+    assert backend.spooler.commands == [("wait_finish",)]
+
+
 def test_native_motion_timeout_is_structured_indeterminate_not_success():
     backend = _NativeMotionBackend(complete_motion=False, complete_barrier=False)
     outcome = MeerK40tIntegration.from_backend(backend).run_normal_motion(
@@ -231,6 +242,34 @@ def test_native_motion_refuses_busy_spooler_before_dispatch():
 
     assert outcome["status"] == "busy"
     assert outcome["acknowledged"] is False
+    assert backend.commands == []
+
+
+def test_native_motion_unknown_spooler_state_is_indeterminate_before_dispatch():
+    backend = _NativeMotionBackend(idle=None)
+    outcome = MeerK40tIntegration.from_backend(backend).run_normal_motion(
+        "home", timeout=0.01
+    )
+
+    assert outcome["status"] == "indeterminate"
+    assert outcome["acknowledged"] is False
+    assert backend.commands == []
+
+
+def test_native_motion_signal_setup_error_is_structured():
+    backend = _NativeMotionBackend()
+
+    def _broken_listen(*args, **kwargs):
+        raise RuntimeError("listener registration failed")
+
+    backend.kernel.listen = _broken_listen
+    outcome = MeerK40tIntegration.from_backend(backend).run_normal_motion(
+        "home", timeout=0.01
+    )
+
+    assert outcome["status"] == "error"
+    assert outcome["acknowledged"] is False
+    assert "listener registration failed" in outcome["error"]
     assert backend.commands == []
 
 
