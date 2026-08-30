@@ -421,7 +421,7 @@ def test_spooler_snapshot_retry_recovers_one_transient_failure():
     """One transient queue-snapshot error is retried before indeterminate."""
     integration = MeerK40tIntegration.from_device(object())
     with patch.object(
-        integration,
+        MeerK40tIntegration,
         "_spooler_jobs",
         side_effect=[None, ("barrier",)],
     ):
