@@ -176,7 +176,7 @@ class MeerK40tIntegration:
         if device is None:
             return None, None, "error", "no active device"
         spooler = getattr(device, "spooler", None)
-        if spooler is None or not hasattr(spooler, "command"):
+        if spooler is None:
             return None, None, "error", "active device has no native spooler"
 
         idle = self._spooler_is_idle(spooler)
@@ -317,6 +317,14 @@ class MeerK40tIntegration:
                 connected=True,
             )
 
+        spooler_command = getattr(spooler, "command", None)
+        if not callable(spooler_command):
+            return self._motion_result(
+                "error",
+                "active device has no native completion barrier",
+                connected=True,
+            )
+
         completed_count = 0
         completed_lock = threading.Lock()
         completion_event = threading.Event()
@@ -368,7 +376,7 @@ class MeerK40tIntegration:
 
             jobs_before_barrier = self._spooler_jobs(spooler)
             try:
-                spooler.command("wait_finish")
+                spooler_command("wait_finish")
             except Exception as exc:
                 return self._motion_result(
                     "error",
