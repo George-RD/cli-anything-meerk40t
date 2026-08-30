@@ -143,6 +143,35 @@ class MeerK40tIntegration:
         except Exception:
             return None
 
+    @classmethod
+    def _spooler_jobs_with_retry(cls, spooler: Any) -> tuple[Any, ...] | None:
+        """Retry one transient queue-snapshot failure before going indeterminate."""
+        jobs = cls._spooler_jobs(spooler)
+        if jobs is None:
+            jobs = cls._spooler_jobs(spooler)
+        return jobs
+
+    @staticmethod
+    def _spooler_origin(spooler: Any) -> str | None:
+        """Return the selected spooler's signal origin when MeerK40t exposes it."""
+        context = getattr(spooler, "context", None)
+        return getattr(context, "path", None) or getattr(context, "_path", None)
+
+    @staticmethod
+    def _job_completed(job: Any) -> bool | None:
+        """Prove that a captured native LaserJob actually executed all loops."""
+        if job is None:
+            return None
+        started = getattr(job, "time_started", None)
+        loops = getattr(job, "loops", None)
+        loops_executed = getattr(job, "loops_executed", None)
+        if loops is None or loops_executed is None:
+            return None
+        try:
+            return started is not None and int(loops_executed) >= int(loops)
+        except (TypeError, ValueError):
+            return None
+
     def live_controller(self) -> tuple[Any, dict[str, Any] | None]:
         """Return the active writable live controller or a structured refusal."""
         device = self._device
@@ -215,8 +244,13 @@ class MeerK40tIntegration:
 
     @staticmethod
     def _contains_busy_output(lines: Any) -> bool:
+        """Detect MeerK40t's busy refusal in scalar or iterable console output."""
         if not lines:
             return False
+        if isinstance(lines, bytes):
+            return b"busy error" in lines.lower()
+        if isinstance(lines, str):
+            return "busy error" in lines.lower()
         try:
             return any("busy error" in str(line).lower() for line in lines)
         except TypeError:
@@ -255,7 +289,7 @@ class MeerK40tIntegration:
         except Exception:
             return False
 
-    def run_normal_motion(self, command: str, timeout: float = 2.0) -> dict[str, Any]:
+    def run_normal_motion(self, command: str, timeout: float = 60.0) -> dict[str, Any]:
         """Dispatch normal motion through MeerK40t and prove native completion.
 
         The command is submitted through MeerK40t's console/spooler path so its
@@ -329,20 +363,27 @@ class MeerK40tIntegration:
         completed_lock = threading.Lock()
         completion_event = threading.Event()
         aborted_event = threading.Event()
+        expected_origin = self._spooler_origin(spooler)
         armed = False
         completed_registered = False
         aborted_registered = False
 
+        def _from_selected_spooler(origin: Any) -> bool:
+            """Accept only signals emitted by the selected device spooler."""
+            return expected_origin is None or origin == expected_origin
+
         def _completed(origin=None, *message):
+            """Wake the exact-job wait loop for selected-spooler completions."""
             nonlocal completed_count
-            if not armed:
+            if not armed or not _from_selected_spooler(origin):
                 return
             with completed_lock:
                 completed_count += 1
             completion_event.set()
 
         def _aborted(origin=None, *message):
-            if armed:
+            """Record only selected-spooler aborts; unrelated devices are ignored."""
+            if armed and _from_selected_spooler(origin):
                 aborted_event.set()
                 completion_event.set()
 
@@ -374,7 +415,7 @@ class MeerK40tIntegration:
                     "busy", "MeerK40t refused motion: Busy Error", connected=True
                 )
 
-            jobs_before_barrier = self._spooler_jobs(spooler)
+            jobs_before_barrier = self._spooler_jobs_with_retry(spooler)
             try:
                 spooler_command("wait_finish")
             except Exception as exc:
@@ -383,13 +424,23 @@ class MeerK40tIntegration:
                     f"failed to queue native completion barrier: {exc}",
                     connected=True,
                 )
-            jobs_after_barrier = self._spooler_jobs(spooler)
-            barrier_job = None
-            if jobs_before_barrier is not None and jobs_after_barrier is not None:
-                before_ids = {id(job) for job in jobs_before_barrier}
-                barrier_job = next(
-                    (job for job in jobs_after_barrier if id(job) not in before_ids),
-                    None,
+            jobs_after_barrier = self._spooler_jobs_with_retry(spooler)
+            if jobs_before_barrier is None or jobs_after_barrier is None:
+                return self._motion_result(
+                    "indeterminate",
+                    "native completion barrier identity is indeterminate",
+                    connected=True,
+                )
+            before_ids = {id(job) for job in jobs_before_barrier}
+            barrier_job = next(
+                (job for job in jobs_after_barrier if id(job) not in before_ids),
+                None,
+            )
+            if barrier_job is None:
+                return self._motion_result(
+                    "indeterminate",
+                    "native completion barrier identity was not observed",
+                    connected=True,
                 )
 
             deadline = time.monotonic() + max(0.0, timeout)
@@ -410,18 +461,29 @@ class MeerK40tIntegration:
 
                 with completed_lock:
                     completed = completed_count
-                barrier_pending = False
-                if barrier_job is not None:
-                    current_jobs = self._spooler_jobs(spooler)
-                    if current_jobs is None:
-                        return self._motion_result(
-                            "indeterminate",
-                            "native completion barrier state is indeterminate",
-                            connected=True,
-                        )
-                    barrier_pending = any(job is barrier_job for job in current_jobs)
+                current_jobs = self._spooler_jobs_with_retry(spooler)
+                if current_jobs is None:
+                    return self._motion_result(
+                        "indeterminate",
+                        "native completion barrier state is indeterminate",
+                        connected=True,
+                    )
+                barrier_pending = any(job is barrier_job for job in current_jobs)
+                barrier_completed = self._job_completed(barrier_job)
+                if not barrier_pending and barrier_completed is False:
+                    return self._motion_result(
+                        "aborted",
+                        "native completion barrier was removed before execution",
+                        connected=True,
+                    )
+                if not barrier_pending and barrier_completed is None:
+                    return self._motion_result(
+                        "indeterminate",
+                        "native completion barrier execution is indeterminate",
+                        connected=True,
+                    )
 
-                if completed >= 2 and not barrier_pending:
+                if completed >= 2 and not barrier_pending and barrier_completed:
                     try:
                         _, connection_error = self.live_controller()
                     except Exception as exc:

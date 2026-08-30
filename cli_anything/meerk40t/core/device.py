@@ -27,6 +27,8 @@ from cli_anything.meerk40t.utils.meerk40t_integration import MeerK40tIntegration
 from cli_anything.meerk40t.utils import serial_probe
 
 _LIST_ECHO = "device"
+_MOVE_COMPLETION_TIMEOUT = 60.0
+_HOME_COMPLETION_TIMEOUT = 120.0
 
 
 def _active_info(snapshot):
@@ -49,6 +51,7 @@ def _active_info(snapshot):
 
 
 def _parse_position(lines):
+    """Parse the position formats emitted by supported MeerK40t runtimes."""
     pos = None
     for line in lines:
         # devinfo format: "current_x,current_y;native_x,native_y;"
@@ -134,14 +137,26 @@ def device_info(backend):
     return result
 
 
-def _normal_motion_result(backend, command, success_key, **fields):
-    """Map the native integration outcome into the stable public result shape."""
-    outcome = MeerK40tIntegration.from_backend(backend).run_normal_motion(command)
+def _normal_motion_result(
+    backend,
+    command,
+    success_key,
+    *,
+    runtime_command=None,
+    timeout=_MOVE_COMPLETION_TIMEOUT,
+    **fields,
+):
+    """Map one native integration outcome into the stable public result shape."""
+    outcome = MeerK40tIntegration.from_backend(backend).run_normal_motion(
+        runtime_command or command,
+        timeout=timeout,
+    )
     acknowledged = bool(outcome.get("acknowledged"))
     result = {
         success_key: acknowledged,
         **fields,
         "command": command,
+        "status": outcome.get("status"),
         "acknowledged": acknowledged,
         "error": outcome.get("error"),
     }
@@ -152,21 +167,36 @@ def _normal_motion_result(backend, command, success_key, **fields):
 
 def home(backend):
     """Home through MeerK40t's native spooler/driver completion path."""
-    return _normal_motion_result(backend, "home", "homed")
+    return _normal_motion_result(
+        backend,
+        "home",
+        "homed",
+        timeout=_HOME_COMPLETION_TIMEOUT,
+    )
 
 
 def physical_home(backend):
     """Physical-home through MeerK40t's native spooler/driver completion path."""
-    return _normal_motion_result(backend, "physical_home", "physical_homed")
+    return _normal_motion_result(
+        backend,
+        "physical_home",
+        "physical_homed",
+        timeout=_HOME_COMPLETION_TIMEOUT,
+    )
 
 
 def move(backend, x, y, absolute=True):
     """Move through MeerK40t so native unit/view/coordinate semantics apply."""
-    cmd = f"move_absolute {x} {y}" if absolute else f"move {x} {y}"
+    public_command = f"move_absolute {x} {y}" if absolute else f"move {x} {y}"
+    runtime_command = (
+        public_command if absolute else f"move_relative {x} {y}"
+    )
     return _normal_motion_result(
         backend,
-        cmd,
+        public_command,
         "moved",
+        runtime_command=runtime_command,
+        timeout=_MOVE_COMPLETION_TIMEOUT,
         x=x,
         y=y,
         absolute=absolute,
