@@ -23,13 +23,11 @@ class MeerK40tIntegration:
         *,
         kernel: Any = None,
         runner: Any = None,
-        backend: Any = None,
     ):
         self._device = device
         self._elements = elements
         self._kernel = kernel
         self._runner = runner
-        self._backend = backend
 
     @classmethod
     def from_backend(cls, backend: Any) -> "MeerK40tIntegration":
@@ -44,7 +42,6 @@ class MeerK40tIntegration:
             elements,
             kernel=getattr(backend, "kernel", None),
             runner=getattr(backend, "run", None),
-            backend=backend,
         )
 
     @classmethod
@@ -135,6 +132,17 @@ class MeerK40tIntegration:
             return None
         return None
 
+    @staticmethod
+    def _spooler_jobs(spooler: Any) -> tuple[Any, ...] | None:
+        """Snapshot queued job identities when the native spooler exposes them."""
+        queue = getattr(spooler, "queue", None)
+        if queue is None:
+            return None
+        try:
+            return tuple(queue)
+        except Exception:
+            return None
+
     def live_controller(self) -> tuple[Any, dict[str, Any] | None]:
         """Return the active writable live controller or a structured refusal."""
         device = self._device
@@ -147,36 +155,63 @@ class MeerK40tIntegration:
                 "connected": False,
             }
         connection = getattr(controller, "connection", None)
-        if not self.connection_state(connection):
+        try:
+            connected = self.connection_state(connection)
+        except Exception as exc:
+            return None, {
+                "error": f"connection state is indeterminate: {exc}",
+                "connected": False,
+                "status": "indeterminate",
+            }
+        if not connected:
             return None, {
                 "error": "no live connection; run device connect first",
                 "connected": False,
             }
         return controller, None
 
-    def _motion_runtime(self) -> tuple[Any, Any, str | None]:
-        """Resolve the native spooler/driver pair and current busy reason."""
+    def _motion_runtime(self) -> tuple[Any, Any, str, str | None]:
+        """Resolve native runtime readiness as ready/busy/indeterminate/error."""
         device = self._device
         if device is None:
-            return None, None, "no active device"
+            return None, None, "error", "no active device"
         spooler = getattr(device, "spooler", None)
         if spooler is None or not hasattr(spooler, "command"):
-            return None, None, "active device has no native spooler"
-        if self._spooler_is_idle(spooler) is False:
-            return spooler, getattr(device, "driver", None), "device spooler is busy"
+            return None, None, "error", "active device has no native spooler"
+
+        idle = self._spooler_is_idle(spooler)
+        if idle is None:
+            return (
+                spooler,
+                getattr(device, "driver", None),
+                "indeterminate",
+                "device spooler state is indeterminate",
+            )
+        if not idle:
+            return (
+                spooler,
+                getattr(device, "driver", None),
+                "busy",
+                "device spooler is busy",
+            )
 
         driver = getattr(device, "driver", None)
         if driver is not None:
             if bool(getattr(driver, "paused", False)):
-                return spooler, driver, "device driver is paused"
+                return spooler, driver, "busy", "device driver is paused"
             hold_work = getattr(driver, "hold_work", None)
             if callable(hold_work):
                 try:
                     if hold_work(0):
-                        return spooler, driver, "device driver is busy"
-                except Exception:
-                    return spooler, driver, "device driver state is indeterminate"
-        return spooler, driver, None
+                        return spooler, driver, "busy", "device driver is busy"
+                except Exception as exc:
+                    return (
+                        spooler,
+                        driver,
+                        "indeterminate",
+                        f"device driver state is indeterminate: {exc}",
+                    )
+        return spooler, driver, "ready", None
 
     @staticmethod
     def _contains_busy_output(lines: Any) -> bool:
@@ -204,7 +239,7 @@ class MeerK40tIntegration:
         return result
 
     def _legacy_callable_completion(self, spooler: Any) -> bool:
-        """Support old embedding/test adapters without weakening native runtime proof.
+        """Support old embedding adapters without weakening native runtime proof.
 
         Released MeerK40t exposes ``spooler.is_idle`` as a boolean property and
         provides the kernel signal bus used by :meth:`run_normal_motion`. Older
@@ -231,22 +266,25 @@ class MeerK40tIntegration:
         until the driver's own pending-work primitive is satisfied.
 
         Queue emptiness alone is not proof. A bounded timeout, native abort,
-        busy/refused state, lost connection, or runtime exception is structured
-        non-success and is never auto-retried.
+        busy/refused or indeterminate state, lost connection, or runtime
+        exception is structured non-success and is never auto-retried.
         """
-        _, connection_error = self.live_controller()
+        try:
+            _, connection_error = self.live_controller()
+        except Exception as exc:
+            return self._motion_result("error", str(exc))
         if connection_error is not None:
             return self._motion_result(
-                "disconnected",
+                connection_error.get("status", "disconnected"),
                 connection_error["error"],
-                connected=False,
+                connected=connection_error.get("connected", False),
             )
 
-        spooler, _, busy_reason = self._motion_runtime()
+        spooler, _, runtime_state, runtime_reason = self._motion_runtime()
         if spooler is None:
-            return self._motion_result("error", busy_reason)
-        if busy_reason is not None:
-            return self._motion_result("busy", busy_reason, connected=True)
+            return self._motion_result("error", runtime_reason, connected=True)
+        if runtime_state != "ready":
+            return self._motion_result(runtime_state, runtime_reason, connected=True)
         if not callable(self._runner):
             return self._motion_result(
                 "error", "integration seam has no command runner", connected=True
@@ -284,6 +322,8 @@ class MeerK40tIntegration:
         completion_event = threading.Event()
         aborted_event = threading.Event()
         armed = False
+        completed_registered = False
+        aborted_registered = False
 
         def _completed(origin=None, *message):
             nonlocal completed_count
@@ -298,15 +338,24 @@ class MeerK40tIntegration:
                 aborted_event.set()
                 completion_event.set()
 
-        listen("spooler;completed", _completed)
-        listen("spooler;aborted", _aborted)
         try:
-            # ``Kernel.listen`` is queued; activate listeners now while
-            # deliberately ignoring replay of a previous last-message value.
-            if callable(process_queue):
-                process_queue()
-            armed = True
+            try:
+                listen("spooler;completed", _completed)
+                completed_registered = True
+                listen("spooler;aborted", _aborted)
+                aborted_registered = True
+                # ``Kernel.listen`` is queued; activate listeners now while
+                # deliberately ignoring replay of previous last-message values.
+                if callable(process_queue):
+                    process_queue()
+            except Exception as exc:
+                return self._motion_result(
+                    "error",
+                    f"native motion signal setup failed: {exc}",
+                    connected=True,
+                )
 
+            armed = True
             try:
                 lines = self._runner(command)
             except Exception as exc:
@@ -317,6 +366,7 @@ class MeerK40tIntegration:
                     "busy", "MeerK40t refused motion: Busy Error", connected=True
                 )
 
+            jobs_before_barrier = self._spooler_jobs(spooler)
             try:
                 spooler.command("wait_finish")
             except Exception as exc:
@@ -325,28 +375,60 @@ class MeerK40tIntegration:
                     f"failed to queue native completion barrier: {exc}",
                     connected=True,
                 )
+            jobs_after_barrier = self._spooler_jobs(spooler)
+            barrier_job = None
+            if jobs_before_barrier is not None and jobs_after_barrier is not None:
+                before_ids = {id(job) for job in jobs_before_barrier}
+                barrier_job = next(
+                    (job for job in jobs_after_barrier if id(job) not in before_ids),
+                    None,
+                )
 
             deadline = time.monotonic() + max(0.0, timeout)
             while True:
                 if callable(process_queue):
-                    process_queue()
+                    try:
+                        process_queue()
+                    except Exception as exc:
+                        return self._motion_result(
+                            "error",
+                            f"native motion signal processing failed: {exc}",
+                            connected=True,
+                        )
                 if aborted_event.is_set():
                     return self._motion_result(
                         "aborted", "MeerK40t aborted the motion job", connected=True
                     )
+
                 with completed_lock:
                     completed = completed_count
-                if completed >= 2:
-                    _, connection_error = self.live_controller()
+                barrier_pending = False
+                if barrier_job is not None:
+                    current_jobs = self._spooler_jobs(spooler)
+                    if current_jobs is None:
+                        return self._motion_result(
+                            "indeterminate",
+                            "native completion barrier state is indeterminate",
+                            connected=True,
+                        )
+                    barrier_pending = any(job is barrier_job for job in current_jobs)
+
+                if completed >= 2 and not barrier_pending:
+                    try:
+                        _, connection_error = self.live_controller()
+                    except Exception as exc:
+                        return self._motion_result("error", str(exc), connected=True)
                     if connection_error is not None:
                         return self._motion_result(
-                            "disconnected",
+                            connection_error.get("status", "disconnected"),
                             connection_error["error"],
-                            connected=False,
+                            connected=connection_error.get("connected", False),
                         )
-                    _, _, post_busy = self._motion_runtime()
-                    if post_busy is not None:
-                        return self._motion_result("busy", post_busy, connected=True)
+                    _, _, post_state, post_reason = self._motion_runtime()
+                    if post_state != "ready":
+                        return self._motion_result(
+                            post_state, post_reason, connected=True
+                        )
                     return self._motion_result("completed", connected=True)
 
                 remaining = deadline - time.monotonic()
@@ -360,10 +442,21 @@ class MeerK40tIntegration:
                 completion_event.clear()
         finally:
             armed = False
-            unlisten("spooler;completed", _completed)
-            unlisten("spooler;aborted", _aborted)
+            if completed_registered:
+                try:
+                    unlisten("spooler;completed", _completed)
+                except Exception:
+                    pass
+            if aborted_registered:
+                try:
+                    unlisten("spooler;aborted", _aborted)
+                except Exception:
+                    pass
             if callable(process_queue):
-                process_queue()
+                try:
+                    process_queue()
+                except Exception:
+                    pass
 
     def status_snapshot(self) -> dict[str, Any]:
         """Return canonical facts consumed by both status transports."""
