@@ -1,4 +1,4 @@
-"""Real-kernel tracer tests for the shared MeerK40t status integration seam."""
+"""Real-kernel tracer tests for the shared MeerK40t integration seam."""
 from __future__ import annotations
 
 import json
@@ -92,3 +92,185 @@ def test_grbl_status_preserves_headless_port_baud_and_attach_normalization():
         assert snapshot["serial_port"] == "unconfigured"
         assert snapshot["baud"] == 115200
         _assert_transport_views_match_snapshot(backend)
+
+
+class _NativeConnection:
+    def __init__(self, connected=True):
+        self.connected = connected
+
+
+class _NativeController:
+    def __init__(self, connected=True):
+        self.connection = _NativeConnection(connected)
+
+    def write(self, value):
+        return None
+
+
+class _NativeDriver:
+    paused = False
+
+    def hold_work(self, priority):
+        return False
+
+
+class _SignalKernel:
+    def __init__(self):
+        self.listeners = {}
+
+    def listen(self, signal, callback, lifecycle_object=None):
+        self.listeners.setdefault(signal, []).append(callback)
+
+    def unlisten(self, signal, callback, lifecycle_object=None):
+        callbacks = self.listeners.get(signal, [])
+        if callback in callbacks:
+            callbacks.remove(callback)
+
+    def emit(self, signal, *message):
+        for callback in list(self.listeners.get(signal, [])):
+            callback("test", *message)
+
+
+class _NativeSpooler:
+    def __init__(self, kernel, *, idle=True, complete_barrier=True, abort_barrier=False):
+        self.kernel = kernel
+        self.is_idle = idle
+        self.complete_barrier = complete_barrier
+        self.abort_barrier = abort_barrier
+        self.commands = []
+
+    def __len__(self):
+        return 0 if self.is_idle else 1
+
+    def command(self, *job):
+        self.commands.append(job)
+        if job == ("wait_finish",):
+            if self.abort_barrier:
+                self.kernel.emit("spooler;aborted")
+            elif self.complete_barrier:
+                self.kernel.emit("spooler;completed")
+
+
+class _NativeMotionBackend:
+    def __init__(
+        self,
+        *,
+        connected=True,
+        idle=True,
+        complete_motion=True,
+        complete_barrier=True,
+        abort_barrier=False,
+        runtime_error=None,
+        busy_output=False,
+    ):
+        self.kernel = _SignalKernel()
+        self.spooler = _NativeSpooler(
+            self.kernel,
+            idle=idle,
+            complete_barrier=complete_barrier,
+            abort_barrier=abort_barrier,
+        )
+        self._device = type(
+            "NativeDevice",
+            (),
+            {
+                "controller": _NativeController(connected),
+                "driver": _NativeDriver(),
+                "spooler": self.spooler,
+                "label": "Native test device",
+            },
+        )()
+        self.complete_motion = complete_motion
+        self.runtime_error = runtime_error
+        self.busy_output = busy_output
+        self.commands = []
+
+    def device(self):
+        return self._device
+
+    def run(self, command):
+        self.commands.append(command)
+        if self.runtime_error is not None:
+            raise RuntimeError(self.runtime_error)
+        if self.busy_output:
+            return [command, "Busy Error"]
+        if self.complete_motion:
+            self.kernel.emit("spooler;completed")
+        return [command]
+
+
+# Issue #61: normal motion uses MeerK40t's native spooler/driver completion seam.
+def test_native_motion_success_requires_motion_and_wait_finish_barrier():
+    backend = _NativeMotionBackend()
+    result = device_core.move(backend, "10mm", "20mm")
+
+    assert result["moved"] is True
+    assert result["acknowledged"] is True
+    assert result["error"] is None
+    assert result["command"] == "move_absolute 10mm 20mm"
+    assert backend.commands == ["move_absolute 10mm 20mm"]
+    assert backend.spooler.commands == [("wait_finish",)]
+
+
+def test_native_motion_timeout_is_structured_indeterminate_not_success():
+    backend = _NativeMotionBackend(complete_motion=False, complete_barrier=False)
+    outcome = MeerK40tIntegration.from_backend(backend).run_normal_motion(
+        "home", timeout=0.01
+    )
+
+    assert outcome["status"] == "indeterminate"
+    assert outcome["acknowledged"] is False
+    assert "timeout" in outcome["error"]
+
+
+def test_native_motion_refuses_busy_spooler_before_dispatch():
+    backend = _NativeMotionBackend(idle=False)
+    outcome = MeerK40tIntegration.from_backend(backend).run_normal_motion(
+        "home", timeout=0.01
+    )
+
+    assert outcome["status"] == "busy"
+    assert outcome["acknowledged"] is False
+    assert backend.commands == []
+
+
+def test_native_motion_console_busy_result_is_not_success():
+    backend = _NativeMotionBackend(busy_output=True)
+    result = device_core.home(backend)
+
+    assert result["homed"] is False
+    assert result["acknowledged"] is False
+    assert "busy" in result["error"].lower()
+
+
+def test_native_motion_runtime_error_is_structured():
+    backend = _NativeMotionBackend(runtime_error="transport exploded")
+    result = device_core.physical_home(backend)
+
+    assert result["physical_homed"] is False
+    assert result["acknowledged"] is False
+    assert "transport exploded" in result["error"]
+
+
+def test_native_motion_abort_is_not_success():
+    backend = _NativeMotionBackend(abort_barrier=True)
+    outcome = MeerK40tIntegration.from_backend(backend).run_normal_motion(
+        "home", timeout=0.01
+    )
+
+    assert outcome["status"] == "aborted"
+    assert outcome["acknowledged"] is False
+
+
+def test_real_kernel_dummy_motion_refuses_without_live_connection():
+    with Meerk40tBackend(
+        profile=_profile("issue61_dummy"),
+        ignore_settings=True,
+        device="dummy",
+    ) as backend:
+        result = device_core.home(backend)
+
+    assert result["homed"] is False
+    assert result["acknowledged"] is False
+    assert result["connected"] is False
+    assert result["error"]
