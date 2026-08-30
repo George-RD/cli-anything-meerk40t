@@ -1,0 +1,59 @@
+name: Apply PR 72 test fix
+
+on:
+  push:
+    branches:
+      - feat/61-native-normal-motion
+    paths:
+      - ".github/workflows/apply-pr72-test-fix.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          ref: feat/61-native-normal-motion
+          fetch-depth: 0
+
+      - name: Patch retry test at the class seam
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path("cli_anything/meerk40t/tests/test_integration_status.py")
+          text = path.read_text(encoding="utf-8")
+          old = '''    with patch.object(
+        integration,
+        "_spooler_jobs",
+        side_effect=[None, ("barrier",)],
+    ):
+'''
+          new = '''    with patch.object(
+        MeerK40tIntegration,
+        "_spooler_jobs",
+        side_effect=[None, ("barrier",)],
+    ):
+'''
+          if text.count(old) != 1:
+              raise SystemExit("expected one instance-level snapshot patch")
+          path.write_text(text.replace(old, new), encoding="utf-8")
+          PY
+
+      - name: Validate syntax and diff
+        run: |
+          python -m compileall -q cli_anything/meerk40t
+          git diff --check
+
+      - name: Commit test correction
+        run: |
+          git config user.name "George"
+          git config user.email "180932462+George-RD@users.noreply.github.com"
+          git add cli_anything/meerk40t/tests/test_integration_status.py
+          git commit -m "test: patch snapshot retry at class seam"
+          git push origin HEAD:feat/61-native-normal-motion
