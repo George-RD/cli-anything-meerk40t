@@ -28,18 +28,20 @@ jobs:
 
           path = Path("cli_anything/meerk40t/tests/test_integration_status.py")
           text = path.read_text(encoding="utf-8")
-          old = '''    with patch.object(
-        integration,
-        "_spooler_jobs",
-        side_effect=[None, ("barrier",)],
-    ):
-'''
-          new = '''    with patch.object(
-        MeerK40tIntegration,
-        "_spooler_jobs",
-        side_effect=[None, ("barrier",)],
-    ):
-'''
+          old = (
+              "    with patch.object(\n"
+              "        integration,\n"
+              "        \"_spooler_jobs\",\n"
+              "        side_effect=[None, (\"barrier\",)],\n"
+              "    ):\n"
+          )
+          new = (
+              "    with patch.object(\n"
+              "        MeerK40tIntegration,\n"
+              "        \"_spooler_jobs\",\n"
+              "        side_effect=[None, (\"barrier\",)],\n"
+              "    ):\n"
+          )
           if text.count(old) != 1:
               raise SystemExit("expected one instance-level snapshot patch")
           path.write_text(text.replace(old, new), encoding="utf-8")
